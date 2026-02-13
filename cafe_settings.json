@@ -1,0 +1,106 @@
+{
+  "naver_id": "tthi9749",
+  "naver_pw": "!gxtt17950",
+  "cafe_file": "tthi9749카페목록.txt",
+  "cafe_list": [
+    {
+      "cafe_id": "23362635",
+      "menu_id": "5"
+    },
+    {
+      "cafe_id": "20716343",
+      "menu_id": "2"
+    },
+    {
+      "cafe_id": "26117874",
+      "menu_id": "5"
+    },
+    {
+      "cafe_id": "13622102",
+      "menu_id": "3"
+    },
+    {
+      "cafe_id": "12373067",
+      "menu_id": "3"
+    },
+    {
+      "cafe_id": "10194103",
+      "menu_id": "3"
+    },
+    {
+      "cafe_id": "25176079",
+      "menu_id": "5"
+    },
+    {
+      "cafe_id": "26642277",
+      "menu_id": "5"
+    },
+    {
+      "cafe_id": "16214071",
+      "menu_id": "2"
+    },
+    {
+      "cafe_id": "27599813",
+      "menu_id": "5"
+    },
+    {
+      "cafe_id": "14851041",
+      "menu_id": "2"
+    },
+    {
+      "cafe_id": "10149643",
+      "menu_id": "13"
+    },
+    {
+      "cafe_id": "22997067",
+      "menu_id": "32"
+    },
+    {
+      "cafe_id": "19865775",
+      "menu_id": "61"
+    },
+    {
+      "cafe_id": "13224076",
+      "menu_id": "3"
+    },
+    {
+      "cafe_id": "11979027",
+      "menu_id": "3"
+    },
+    {
+      "cafe_id": "14082314",
+      "menu_id": "3"
+    },
+    {
+      "cafe_id": "11263774",
+      "menu_id": "3"
+    },
+    {
+      "cafe_id": "11408599",
+      "menu_id": "3"
+    },
+    {
+      "cafe_id": "26620081",
+      "menu_id": "6"
+    },
+    {
+      "cafe_id": "24525140",
+      "menu_id": "5"
+    }
+  ],
+  "posting_interval": 10,
+  "post_count": 50,
+  "linebreak_enabled": true,
+  "linebreak_max_chars": 23,
+  "kw_repeat_min": 2,
+  "kw_repeat_max": 5,
+  "use_product_name": true,
+  "use_product_page_images": false,
+  "max_images_per_product": 6,
+  "selected_category": "건강식품",
+  "commission_image_folder": "C:/Users/USER/Desktop/coupang_bot/쿠팡수수료",
+  "auto_restart_enabled": false,
+  "auto_restart_hour": 22,
+  "auto_restart_minute": 24,
+  "helper_cafe_mode": ""
+}
