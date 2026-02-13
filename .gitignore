@@ -1,3 +1,8 @@
 .vercel
 .env*.local
 .auth_session.json
+
+# Next.js
+.next
+out
+node_modules
