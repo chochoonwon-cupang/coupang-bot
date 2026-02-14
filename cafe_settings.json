@@ -95,8 +95,6 @@
   "kw_repeat_min": 2,
   "kw_repeat_max": 5,
   "use_product_name": true,
-  "use_product_page_images": false,
-  "max_images_per_product": 6,
   "selected_category": "건강식품",
   "commission_image_folder": "C:/Users/USER/Desktop/coupang_bot/쿠팡수수료",
   "auto_restart_enabled": false,
