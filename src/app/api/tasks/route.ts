@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase";
+import { supabaseAdmin } from "@/lib/supabase";
 
 export async function GET() {
   try {
-    const supabaseAdmin = getSupabaseAdmin();
     const { data, error } = await supabaseAdmin
       .from("tasks")
       .select("id, keyword, status, result_url, error_message, created_at, updated_at")
@@ -26,13 +25,9 @@ export async function POST(request: Request) {
     const body = await request.json();
     const keyword = (body.keyword || "").trim();
     if (!keyword) {
-      return NextResponse.json(
-        { error: "키워드를 입력해주세요." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "키워드를 입력해주세요." }, { status: 400 });
     }
 
-    const supabaseAdmin = getSupabaseAdmin();
     const { data, error } = await supabaseAdmin
       .from("tasks")
       .insert({ keyword, status: "pending" })
