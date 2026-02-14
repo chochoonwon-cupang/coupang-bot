@@ -1,15 +1,8 @@
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 
-let _supabaseAdmin: SupabaseClient | null = null;
+const url = process.env.SUPABASE_URL!;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-export function getSupabaseAdmin(): SupabaseClient {
-  if (!_supabaseAdmin) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_KEY;
-    if (!url || !key) {
-      throw new Error("NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_KEY must be set");
-    }
-    _supabaseAdmin = createClient(url, key);
-  }
-  return _supabaseAdmin;
-}
+export const supabaseAdmin = createClient(url, serviceKey, {
+  auth: { persistSession: false },
+});
