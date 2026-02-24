@@ -5,6 +5,22 @@
 # 실서비스에서는 .env 파일이나 환경변수로 관리하는 것을 권장합니다.
 # ============================================================
 
+import os
+
+# ── SaaS 소유자 UID (post_logs.owner_user_id) ──
+# Supabase auth.uid() 또는 users.id 값. 환경변수 OWNER_USER_ID 또는 config.json
+_owner = os.getenv("OWNER_USER_ID", "")
+if not _owner:
+    try:
+        import json
+        _cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        if os.path.isfile(_cfg):
+            with open(_cfg, "r", encoding="utf-8") as f:
+                _owner = (json.load(f) or {}).get("OWNER_USER_ID", "") or ""
+    except Exception:
+        pass
+OWNER_USER_ID = (_owner or "").strip()
+
 # ── 쿠팡 파트너스 API ──
 # GUI에서 사용자가 직접 입력합니다.
 ACCESS_KEY = ""

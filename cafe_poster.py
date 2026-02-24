@@ -9,6 +9,7 @@ import time
 import random
 import os
 import re
+import tempfile
 
 # Selenium / pyperclip은 실제 포스팅 시에만 필요하므로 지연 import 사용
 # (GUI에서 load_cafe_list만 호출할 때 ModuleNotFoundError 방지)
@@ -245,12 +246,182 @@ def _type_with_format(driver, text, is_subtitle=False, is_highlight=False, delay
         _exec_editor_command(driver, "foreColor", "#000000")
 
 
+def _prepare_image_with_border_and_keyword(img_path, keyword, accent_color=None, log=None):
+    """
+    이미지에 테두리(20px)를 추가하고, 하단에 키워드 텍스트를
+    불투명 배경 위에 가운데 정렬로 삽입합니다. (원본색상 유지)
+    accent_color: (r,g,b) — None이면 등록마다 랜덤. 배경·테두리 동일 색상.
+    Returns: 수정된 이미지 경로 (실패 시 원본 경로)
+    """
+    _log = log or print
+    if not keyword or not os.path.isfile(img_path):
+        return img_path
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        _log("[이미지] Pillow 미설치 — 테두리/키워드 적용 건너뜀")
+        return img_path
+
+    try:
+        img = Image.open(img_path).convert("RGBA")
+        w, h = img.size
+
+        # 1) 테두리 20px
+        BORDER = 20
+
+        # 2) 배경·테두리 색상 — 등록마다 랜덤 (흰 글자 대비 어두운 색)
+        if accent_color is None:
+            r = random.randint(40, 120)
+            g = random.randint(40, 120)
+            b = random.randint(40, 120)
+            accent_color = (r, g, b)
+        border_color = (*accent_color, 255)
+
+        # 3) 하단 키워드 영역 — 원본색상 유지 (투명 없음, 불투명 배경)
+        font_size = max(14, min(w, h) // 22)
+        text_height = font_size + 20
+        overlay_color = (*accent_color, 255)  # 불투명
+
+        new_h = h + BORDER * 2 + text_height
+        new_w = w + BORDER * 2
+        out = Image.new("RGBA", (new_w, new_h), (255, 255, 255, 255))
+
+        draw = ImageDraw.Draw(out)
+
+        # 테두리 (배경색과 동일)
+        draw.rectangle([0, 0, new_w - 1, new_h - 1], outline=border_color, width=BORDER)
+
+        # 원본 이미지 붙여넣기 (원본색상 유지)
+        out.paste(img, (BORDER, BORDER))
+
+        # 하단 텍스트 영역 — 불투명 배경 (테두리·배경 동일 색상)
+        overlay_top = BORDER + h
+        draw.rectangle(
+            [BORDER, overlay_top, new_w - BORDER - 1, new_h - BORDER - 1],
+            fill=overlay_color,
+        )
+
+        # 키워드 텍스트 — 흰색, 가운데 정렬
+        font = None
+        font_paths = [
+            "C:/Windows/Fonts/malgun.ttf",
+            "C:/Windows/Fonts/gulim.ttc",
+            "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        ]
+        for fp in font_paths:
+            if os.path.isfile(fp):
+                try:
+                    font = ImageFont.truetype(fp, font_size)
+                    break
+                except Exception:
+                    pass
+        if font is None:
+            font = ImageFont.load_default()
+
+        bbox = draw.textbbox((0, 0), keyword, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_x = BORDER + (new_w - BORDER * 2 - text_w) // 2
+        text_y = overlay_top + (text_height - font_size) // 2
+        draw.text((text_x, text_y), keyword, fill=(255, 255, 255, 255), font=font)
+
+        out_rgb = out.convert("RGB")
+
+        fd, out_path = tempfile.mkstemp(suffix=".jpg", prefix="cafe_img_")
+        os.close(fd)
+        out_rgb.save(out_path, "JPEG", quality=92)
+        _log(f"[이미지] 테두리+키워드 적용: {os.path.basename(img_path)} → {keyword[:20]}...")
+        return out_path
+    except Exception as e:
+        _log(f"[이미지] 테두리/키워드 적용 실패 (원본 사용): {e}")
+        return img_path
+
+
+def _set_open_settings_public(driver, log=None):
+    """
+    카페 글쓰기 페이지에서 공개설정을 '전체공개'로 설정합니다.
+    참고 HTML: btn_open_set(공개 설정) → radio#all(전체공개)
+    """
+    _log = log or print
+    try:
+        # 1) 공개 설정 버튼 클릭 (패널 열기)
+        open_btn_selectors = [
+            "button.btn_open_set",
+            ".open_set button.btn_open_set",
+            "button[class*='open_set']",
+        ]
+        opened = False
+        for sel in open_btn_selectors:
+            try:
+                btn = driver.find_element(By.CSS_SELECTOR, sel)
+                if "공개 설정" in (btn.text or ""):
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                    time.sleep(0.3)
+                    btn.click()
+                    opened = True
+                    _log("[포스팅] 공개 설정 패널 열기")
+                    break
+            except Exception:
+                continue
+        if not opened:
+            # 텍스트로 버튼 찾기
+            try:
+                btns = driver.find_elements(By.CSS_SELECTOR, "button, .btn_open_set")
+                for b in btns:
+                    if "공개 설정" in (b.text or ""):
+                        b.click()
+                        opened = True
+                        _log("[포스팅] 공개 설정 패널 열기")
+                        break
+            except Exception:
+                pass
+        if not opened:
+            _log("[포스팅] 공개 설정 버튼을 찾지 못함 (건너뜀)")
+            return
+
+        time.sleep(0.5)
+
+        # 2) 전체공개 라디오 선택 (label 클릭이 가장 안정적)
+        try:
+            label = driver.find_element(By.CSS_SELECTOR, "label[for='all']")
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", label)
+            time.sleep(0.2)
+            label.click()
+            _log("[포스팅] 전체공개 선택 완료")
+            return
+        except Exception:
+            pass
+        try:
+            labels = driver.find_elements(By.CSS_SELECTOR, "label.label")
+            for lbl in labels:
+                if "전체공개" in (lbl.text or ""):
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", lbl)
+                    time.sleep(0.2)
+                    lbl.click()
+                    _log("[포스팅] 전체공개 선택 완료 (label)")
+                    return
+        except Exception:
+            pass
+        try:
+            radio = driver.find_element(By.CSS_SELECTOR, "input#all, input[name='public'][value='true']")
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", radio)
+            time.sleep(0.2)
+            driver.execute_script("arguments[0].click();", radio)
+            _log("[포스팅] 전체공개 선택 완료 (radio)")
+            return
+        except Exception:
+            pass
+        _log("[포스팅] 전체공개 라디오를 찾지 못함 (건너뜀)")
+    except Exception as e:
+        _log(f"[포스팅] 공개설정 설정 중 오류 (건너뜀): {e}")
+
+
 def write_cafe_post(driver, cafe_id, menu_id, title, body,
-                    image_paths=None, image_map=None, log=None):
+                    image_paths=None, image_map=None, keyword=None, log=None):
     """
     네이버 카페에 글을 작성합니다.
     본문 중 '📸 [상품 이미지]' 마커를 만나면
     해당 상품의 다운로드된 이미지를 그 위치에 업로드합니다.
+    keyword가 있으면 이미지에 테두리+키워드 텍스트(하단, 배경 투명도 20%)를 적용합니다.
 
     Args:
         driver: Selenium WebDriver 인스턴스
@@ -261,6 +432,7 @@ def write_cafe_post(driver, cafe_id, menu_id, title, body,
         image_paths: 첨부할 이미지 경로 리스트 (선택, 하위 호환)
         image_map: 순서대로 삽입할 이미지 경로 리스트
                    [img1_path, img2_path, ...] — 본문의 📸 마커 순서와 1:1 매칭
+        keyword: 전달 키워드 (이미지 하단에 표시, 테두리 적용)
         log: 로그 콜백 함수
 
     Returns:
@@ -270,6 +442,9 @@ def write_cafe_post(driver, cafe_id, menu_id, title, body,
 
     # image_map이 없으면 image_paths 리스트를 그대로 사용
     ordered_images = list(image_map or image_paths or [])
+    temp_paths = []  # 테두리/키워드 적용 시 생성된 임시 파일 (정리용)
+    # 등록마다 랜덤 배경·테두리 색상 (한 포스트 내 이미지들은 동일 색상)
+    accent_color = (random.randint(40, 120), random.randint(40, 120), random.randint(40, 120)) if keyword else None
     image_idx = 0  # 다음에 삽입할 이미지 인덱스
 
     IMAGE_MARKER = "📸 [상품 이미지]"
@@ -336,13 +511,21 @@ def write_cafe_post(driver, cafe_id, menu_id, title, body,
         for i, line in enumerate(lines):
             stripped = line.strip()
 
-            # ── 📸 마커 감지 → 해당 상품 이미지 업로드 ──
+            # ── 📸 마커 감지 → 해당 상품 이미지 업로드 (첫 번째 이미지만 테두리+키워드) ──
             if IMAGE_MARKER in stripped and image_idx < len(ordered_images):
                 img_path = ordered_images[image_idx]
+                if keyword and image_idx == 0:
+                    prepared = _prepare_image_with_border_and_keyword(
+                        img_path, keyword, accent_color=accent_color, log=_log
+                    )
+                    if prepared != img_path:
+                        temp_paths.append(prepared)
+                        img_path = prepared
                 _log(f"[포스팅] 📸 상품 {image_idx + 1} 이미지 삽입: "
                      f"{os.path.basename(str(img_path))}")
-                _upload_single_image(driver, img_path, _log)
+                _upload_single_image(driver, img_path, _log, click_last_section=True)
                 image_idx += 1
+                time.sleep(0.6)  # 이미지 섹션 DOM 업데이트 대기
                 ActionChains(driver).send_keys(Keys.ENTER).perform()
                 time.sleep(0.3)
 
@@ -386,6 +569,10 @@ def write_cafe_post(driver, cafe_id, menu_id, title, body,
 
         _log(f"[포스팅] 본문 입력 완료 ({len(clean_body)}자, 이미지 {image_idx}개)")
         time.sleep(1)
+
+        # ── 공개설정: 전체공개 선택 ──
+        _set_open_settings_public(driver, _log)
+        time.sleep(0.5)
 
         # ── 등록 버튼 클릭 ──
         _log("[포스팅] 등록 버튼 클릭 중...")
@@ -442,6 +629,13 @@ def write_cafe_post(driver, cafe_id, menu_id, title, body,
     except Exception as e:
         _log(f"[포스팅] ✘ 글 작성 중 오류: {e}")
         return False
+    finally:
+        for p in temp_paths:
+            try:
+                if os.path.isfile(p):
+                    os.remove(p)
+            except Exception:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────
@@ -637,12 +831,13 @@ def _click_photo_toolbar(driver):
         return False
 
 
-def _upload_single_image(driver, image_path, log):
+def _upload_single_image(driver, image_path, log, click_last_section=False):
     """
     posting_help.py 방식으로 이미지 1장을 네이버 에디터에 업로드한다.
     1) input[type=file]을 먼저 찾는다.
     2) 없으면 사진 툴바 버튼을 클릭해서 input을 생성시킨다.
     3) send_keys로 파일 경로를 전송한다.
+    click_last_section: True면 마지막 섹션(이미지 포함)을 클릭해 커서를 맨 아래로 둠 (블로그용)
     """
     abs_path = os.path.abspath(image_path)
     if not os.path.isfile(abs_path):
@@ -679,11 +874,19 @@ def _upload_single_image(driver, image_path, log):
         try:
             ActionChains(driver).send_keys(Keys.ESCAPE).perform()
             time.sleep(0.2)
-            body_el = driver.find_element(
-                By.CSS_SELECTOR, ".se-section-text, .se-module-text, div.editor_body"
-            )
-            body_el.click()
-            time.sleep(0.1)
+            if click_last_section:
+                sel = ".se-section-text, .se-module-text, .se-module-image, .se-component.se-image, div.editor_body"
+                body_els = driver.find_elements(By.CSS_SELECTOR, sel)
+                body_el = body_els[-1] if body_els else None
+            else:
+                body_el = driver.find_element(
+                    By.CSS_SELECTOR, ".se-section-text, .se-module-text, div.editor_body"
+                )
+            if body_el:
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", body_el)
+                time.sleep(0.2)
+                body_el.click()
+                time.sleep(0.2)
         except Exception:
             pass
         return True
@@ -1155,7 +1358,8 @@ def run_auto_posting(
     driver_holder=None,
     keyword_repeat_min=3,
     keyword_repeat_max=7,
-    posting_interval=60,
+    posting_interval_min=5,
+    posting_interval_max=30,
     linebreak_enabled=False,
     linebreak_max_chars=45,
     link_btn_image=None,       # (하위호환 유지, 미사용)
@@ -1167,6 +1371,7 @@ def run_auto_posting(
     use_product_name=False,
     category="건강식품",
     commission_image_folder=None,
+    program_username=None,
 ):
     """
     전체 자동 포스팅 파이프라인 (유료회원/본인/추천인 교차 발행):
@@ -1187,7 +1392,7 @@ def run_auto_posting(
         log: 로그 콜백 함수
         stop_flag: 중지 플래그 확인 함수 (callable, True 반환 시 중지)
         driver_holder: dict - driver 참조 외부 접근용
-        posting_interval: 포스팅 주기 (분)
+        posting_interval_min, posting_interval_max: 포스팅 주기 범위 (분, 랜덤)
         linebreak_enabled: 모바일 가독성 줄바꿈 사용 여부
         linebreak_max_chars: 줄바꿈 시 한 줄 최대 글자 수
         link_btn_image: (미사용, 하위호환 유지)
@@ -1200,11 +1405,22 @@ def run_auto_posting(
     Returns:
         dict: {"success": 성공 수, "fail": 실패 수, "total": 전체 수}
     """
+    import os
     from main import run_pipeline
-    from supabase_client import fetch_banned_brands, is_keyword_banned
+    from supabase_client import fetch_banned_brands, is_keyword_banned, insert_post_log
 
     _log = log or print
     _stop = stop_flag or (lambda: False)
+
+    if program_username is None:
+        try:
+            from auth import get_session
+            s = get_session()
+            program_username = (s or {}).get("username", "") or ""
+        except Exception:
+            program_username = ""
+
+    server_name = os.getenv("SERVER_NAME", "PC-LOCAL")
 
     banned_brands = []
     try:
@@ -1228,7 +1444,6 @@ def run_auto_posting(
         own_slots_per_cycle = 3 if has_referrer else 2
         kw_list = keywords if keywords else [""]
         cycles = max(1, (len(kw_list) + own_slots_per_cycle - 1) // own_slots_per_cycle)
-        own_kw_idx = 0
 
         for _ in range(cycles):
             for slot in pattern:
@@ -1243,7 +1458,7 @@ def run_auto_posting(
                         "category": member.get("category", "기타"),
                     })
                 elif slot == "own":
-                    kw = kw_list[own_kw_idx % len(kw_list)]
+                    kw = random.choice(kw_list)
                     tasks.append({
                         "type": "own",
                         "keyword": kw,
@@ -1252,7 +1467,6 @@ def run_auto_posting(
                         "member_name": "본인",
                         "category": category,
                     })
-                    own_kw_idx += 1
                 elif slot == "referrer" and has_referrer:
                     tasks.append({
                         "type": "referrer",
@@ -1263,8 +1477,10 @@ def run_auto_posting(
                         "category": referrer.get("category", "기타"),
                     })
     else:
-        # 유료회원 없음: 본인 글만 발행
-        for kw in keywords:
+        # 유료회원 없음: 본인 글만 발행 (랜덤 순서)
+        kw_list = list(keywords) if keywords else []
+        random.shuffle(kw_list)
+        for kw in kw_list:
             tasks.append({
                 "type": "own",
                 "keyword": kw,
@@ -1449,6 +1665,7 @@ def run_auto_posting(
             driver, cafe_id, menu_id,
             title, body,
             image_map=ordered_images,
+            keyword=keyword,
             log=_log,
         )
 
@@ -1460,22 +1677,53 @@ def run_auto_posting(
             else:
                 _log(f"  ⚠ [{type_label}] 댓글 작성 실패 (포스팅은 성공)")
             success += 1
+            # post_logs 테이블에 기록
+            try:
+                posting_url = driver.current_url if driver else None
+                if program_username:
+                    pt = "self" if task_type == "own" else ("paid" if task_type == "paid" else "referrer")
+                    partner_id = None
+                    for p in products:
+                        url = p.get("productUrl") or p.get("original_url")
+                        if url and "lptag=" in url.lower():
+                            try:
+                                from urllib.parse import urlparse, parse_qs
+                                qs = parse_qs(urlparse(url).query)
+                                partner_id = (qs.get("lptag") or [None])[0]
+                                if partner_id:
+                                    break
+                            except Exception:
+                                pass
+                    insert_post_log(
+                        program_username=program_username,
+                        keyword=keyword,
+                        posting_url=posting_url,
+                        server_name=server_name,
+                        post_type=pt,
+                        partner_id=partner_id,
+                        log=_log,
+                    )
+            except Exception as e:
+                _log(f"  ⚠ [post_logs] 기록 실패 (무시): {e}")
         else:
             fail += 1
 
-        # 연속 포스팅 간 대기
+        # 연속 포스팅 간 대기 (랜덤)
         is_last = (task_idx == len(tasks) - 1)
         if not _stop() and not is_last:
-            wait_sec = posting_interval * 60
-            _log(f"  ⏱ 포스팅 주기: {posting_interval}분 ({wait_sec}초) 대기 중...")
-            for elapsed in range(0, wait_sec, 5):
+            wait_min = random.randint(
+                min(posting_interval_min, posting_interval_max),
+                max(posting_interval_min, posting_interval_max)
+            )
+            wait_sec = wait_min * 60
+            _log(f"  ⏱ 포스팅 주기: {wait_min}분 대기 중... (범위: {posting_interval_min}~{posting_interval_max}분)")
+            for elapsed in range(wait_sec):
                 if _stop():
                     stopped = True
                     break
-                remaining = wait_sec - elapsed
-                if remaining > 60 and elapsed % 60 == 0 and elapsed > 0:
-                    _log(f"  ⏱ {remaining // 60}분 남음...")
-                time.sleep(min(5, remaining))
+                if elapsed > 0 and elapsed % 60 == 0:
+                    _log(f"  ⏱ {wait_sec // 60 - elapsed // 60}분 남음...")
+                time.sleep(1)
 
         # 모든 카페에 포스팅 완료 → 상품 이미지만 삭제 (수수료 이미지는 사용자 폴더라 유지)
         if product_image_count > 0:

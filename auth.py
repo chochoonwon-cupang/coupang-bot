@@ -8,27 +8,31 @@ import hashlib
 import secrets
 import json
 import os
+import sys
 import uuid
 from datetime import datetime, timedelta
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# exe 실행 시 exe 위치 기준, 스크립트 실행 시 소스 위치 기준
+BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 SESSION_FILE = os.path.join(BASE_DIR, ".auth_session.json")
 
+# Cython 컴파일된 auth_core 사용 (있으면), 없으면 로컬 구현
+try:
+    from auth_core import _hash_password, _verify_password
+except ImportError:
+    def _hash_password(password: str) -> str:
+        """비밀번호를 salt + SHA256으로 해싱"""
+        salt = secrets.token_hex(16)
+        h = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+        return f"{salt}:{h}"
 
-def _hash_password(password: str) -> str:
-    """비밀번호를 salt + SHA256으로 해싱"""
-    salt = secrets.token_hex(16)
-    h = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
-    return f"{salt}:{h}"
-
-
-def _verify_password(password: str, stored: str) -> bool:
-    """저장된 해시와 비밀번호 검증"""
-    if not stored or ":" not in stored:
-        return False
-    salt, h = stored.split(":", 1)
-    computed = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
-    return secrets.compare_digest(computed, h)
+    def _verify_password(password: str, stored: str) -> bool:
+        """저장된 해시와 비밀번호 검증"""
+        if not stored or ":" not in stored:
+            return False
+        salt, h = stored.split(":", 1)
+        computed = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+        return secrets.compare_digest(computed, h)
 
 
 def _get_client():
@@ -80,7 +84,16 @@ def register(username: str, password: str, referral_username: str = None, log=No
         }
         if referral_username:
             row["referrer_id"] = referral_username
-        client.table("users").insert(row).execute()
+
+        try:
+            client.table("users").insert(row).execute()
+        except Exception as insert_err:
+            err_str = str(insert_err).lower()
+            if "column" in err_str or "schema" in err_str or "bod_to_terms" in err_str or "agreed_to_terms" in err_str:
+                del row["agreed_to_terms"]
+                client.table("users").insert(row).execute()
+            else:
+                raise insert_err
 
         # 추천인 처리
         if referral_username:

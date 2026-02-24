@@ -84,8 +84,8 @@ M = 14   # 외곽 margin
 S = 12   # spacing
 P = 18   # 카드 padding
 
-# 파일 경로
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 파일 경로 (PyInstaller frozen 시 exe 위치 기준)
+BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 API_KEYS_FILE = os.path.join(BASE_DIR, ".api_keys.json")
 CAFE_SETTINGS_FILE = os.path.join(BASE_DIR, "cafe_settings.json")
 
@@ -584,16 +584,26 @@ class App:
         self._stop_flag = False
         self.cafe_list = []
         self.is_posting = False
+        self.is_blog_posting = False
 
         # 자동 재시작 설정
         self._auto_restart_enabled = False
         self._auto_restart_hour = 9      # 기본 09시
         self._auto_restart_minute = 0    # 기본 00분
+        self._auto_restart_blog = False  # 블로그 자동재시작
+        self._auto_restart_cafe = True   # 카페 자동재시작 (기본)
+        self._agent_use_new_cafe_list = False  # SaaS 서버뉴카페 체크 시 agent_cafe_lists 사용
         self._auto_restart_timer_id = None
         self._auto_restart_daily = True  # 매일 반복
+        self._auto_restart_pending_cafe = False  # 블로그→카페 순차 실행용
 
         # 에이전트 모드 (SaaS 비서 모드 — 1분마다 tasks 테이블 확인)
         self._agent_poll_timer_id = None
+        # 에이전트모드 실행 (agent_commands + agent_configs)
+        self._agent_exec_var = tk.BooleanVar(value=False)
+        self._agent_cmd_poll_timer_id = None
+        self._agent_heartbeat_timer_id = None
+        self.worker_thread = None
 
         self.app_links = {}
         self.banners = []
@@ -675,7 +685,9 @@ class App:
         self.main_container.pack(fill="both", expand=True, pady=(S, 0))
 
         self._build_search_page()
+        self._build_blog_page()
         self._build_cafe_page()
+        self._build_global_log(wrap)
         self._build_footer(wrap)
         self._build_banner(wrap)
         self._switch_tab_main("search")
@@ -688,10 +700,19 @@ class App:
         row = tk.Frame(card, bg=BG_CARD)
         row.pack(fill="x", padx=6, pady=4)
 
+        # 에이전트모드 실행 체크박스 (상단)
+        self._agent_exec_cb = tk.Checkbutton(
+            row, text="  에이전트모드 실행  ",
+            variable=self._agent_exec_var, font=F_SM, bg=BG_CARD, fg=FG,
+            activebackground=BG_CARD, activeforeground=FG, selectcolor=BG_CARD,
+            command=self._on_agent_exec_toggle,
+        )
+        self._agent_exec_cb.pack(side="left", padx=(0, S))
+
         self._tab_btns = {}
         self._cur_tab = "search"
 
-        for tid, txt in [("search", "🔍 상품 검색"), ("cafe", "카페 포스팅")]:
+        for tid, txt in [("search", "🔍 상품 검색"), ("blog", "블로그 포스팅"), ("cafe", "카페 포스팅")]:
             btn = TabBtn(row, text=f"  {txt}  ",
                          command=lambda t=tid: self._switch_tab_main(t))
             btn.pack(side="left", padx=(0, S))
@@ -725,8 +746,52 @@ class App:
             w.pack_forget()
         if tid == "search":
             self.pg_search.pack(fill="both", expand=True)
+        elif tid == "blog":
+            self.pg_blog.pack(fill="both", expand=True)
         else:
             self.pg_cafe.pack(fill="both", expand=True)
+
+    # ── 공용 에이전트 로그 (항상 표시, 탭 무관) ──
+    def _build_global_log(self, parent):
+        sh, card = _card(parent, pad=8)
+        sh.pack(fill="x", pady=(S, 0))
+
+        row = tk.Frame(card, bg=BG_CARD)
+        row.pack(fill="x", padx=12, pady=(8, 4))
+        tk.Label(row, text="에이전트 활동 내역", font=F_SEC, bg=BG_CARD,
+                 fg=FG, anchor="w").pack(side="left")
+        _action_btn(row, " 로그 지우기 ", ORANGE, ORANGE_H, self._clear_global_log).pack(side="right")
+        _sep(card)
+
+        log_wrap = tk.Frame(card, bg=LOG_BG, highlightthickness=2, highlightbackground=BD)
+        log_wrap.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        self.global_log_text = tk.Text(
+            log_wrap, font=F_LOG, bg=LOG_BG, fg=LOG_FG,
+            relief="flat", wrap="word", state="disabled",
+            highlightthickness=0, padx=10, pady=10, height=8,
+        )
+        gsb = ModernScrollbar(log_wrap, command=self.global_log_text.yview)
+        gsb.pack(side="right", fill="y")
+        self.global_log_text.config(yscrollcommand=gsb.set)
+        self.global_log_text.pack(fill="both", expand=True)
+
+    def append_log_global(self, msg):
+        """에이전트 모드 관련 로그([AGENT],[BLOG],[CAFE]) — 탭과 무관하게 항상 공용 로그에 출력"""
+        print(msg)
+        def _do():
+            if getattr(self, "global_log_text", None) and self.global_log_text.winfo_exists():
+                self.global_log_text.config(state="normal")
+                self.global_log_text.insert("end", msg + "\n")
+                self.global_log_text.see("end")
+                self.global_log_text.config(state="disabled")
+        if self.root.winfo_exists():
+            self.root.after(0, _do)
+
+    def _clear_global_log(self):
+        if getattr(self, "global_log_text", None):
+            self.global_log_text.config(state="normal")
+            self.global_log_text.delete("1.0", "end")
+            self.global_log_text.config(state="disabled")
 
     # ── 푸터 ──
     def _build_footer(self, parent):
@@ -957,12 +1022,12 @@ class App:
             if url:
                 webbrowser.open(url)
             else:
-                messagebox.showinfo("안내", "프로그램 사용법 영상 링크가 등록되어 있지 않습니다.")
+                messagebox.showinfo("안내", "광고교육 및 사용법 영상 링크가 등록되어 있지 않습니다.")
 
         for txt, c, h, cmd in [
             ("키워드 불러오기", POINT,  POINT_H,  self._on_load_keywords),
             ("추천인 포스팅발행 키워드등록", TEAL, TEAL_H,  self._open_distribute_keywords_dialog),
-            ("▶️ 프로그램 사용법영상", RED, RED_H, _on_tutorial_video),
+            ("▶️ 광고교육 및 사용법영상", RED, RED_H, _on_tutorial_video),
         ]:
             _action_btn(bar, f" {txt} ", c, h, cmd).pack(
                 side="left", padx=(0, 4))
@@ -1106,6 +1171,20 @@ class App:
             side="left", padx=(4, 0))
 
         r += 1
+        self._lbl(form, "", r)
+        self.use_paid_keywords_frame = tk.Frame(form, bg=BG_CARD)
+        self.use_paid_keywords_frame.grid(row=r, column=1, sticky="w", pady=8)
+        self.use_paid_member_keywords_var = tk.BooleanVar(value=False)
+        self.use_paid_keywords_cb = tk.Checkbutton(
+            self.use_paid_keywords_frame,
+            text="유료회원 키워드 사용 (관리자 전용, 키워드 설정 없이 랜덤 사용)",
+            variable=self.use_paid_member_keywords_var,
+            font=F_SM, bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+            selectcolor=BG_CARD,
+        )
+        self.use_paid_keywords_cb.pack(side="left")
+
+        r += 1
         self._lbl(form, "이미지 저장 경로:", r)
         imgf = tk.Frame(form, bg=BG_CARD)
         imgf.grid(row=r, column=1, sticky="ew", pady=8)
@@ -1140,7 +1219,677 @@ class App:
         pass
 
     # ═══════════════════════════════════════════════
-    # PAGE 2 — 카페 포스팅
+    # PAGE 2 — 블로그 포스팅
+    # ═══════════════════════════════════════════════
+    def _build_blog_page(self):
+        self.pg_blog = tk.Frame(self.main_container, bg=BG)
+
+        sh, card = _card(self.pg_blog, pad=8)
+        sh.pack(fill="x")
+        bar = tk.Frame(card, bg=BG_CARD)
+        bar.pack(fill="x", padx=4, pady=3)
+
+        for txt, c, h, cmd in [
+            ("설정 저장",   TEAL,   TEAL_H,   self._save_blog_settings),
+            ("설정 불러오기", POINT,  POINT_H,  self._load_blog_settings),
+            ("발행 시작 ▶", GREEN,  GREEN_H,  self._on_start_blog_posting),
+            ("발행 중지",   RED,    RED_H,    self._on_stop_blog_posting),
+            ("로그 지우기", ORANGE, ORANGE_H, self._clear_blog_log),
+        ]:
+            _action_btn(bar, f" {txt} ", c, h, cmd).pack(
+                side="left", padx=(0, 4))
+        self.blog_auto_start_cafe_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            bar, text=" 카페자동시작 ", variable=self.blog_auto_start_cafe_var,
+            font=F_SM, bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+            selectcolor=BG_CARD,
+        ).pack(side="left", padx=(8, 0))
+
+        body = tk.Frame(self.pg_blog, bg=BG)
+        body.pack(fill="both", expand=True, pady=(S, 0))
+        body.columnconfigure(0, weight=2, minsize=380)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        self._build_blog_settings(body)
+        self._build_blog_log(body)
+
+    def _build_blog_settings(self, parent):
+        sh, card = _card(parent, auto_height=False)
+        sh.grid(row=0, column=0, sticky="nsew", padx=(0, S // 2))
+
+        scroll_canvas = tk.Canvas(card, bg=BG_CARD, highlightthickness=0, bd=0)
+        scrollbar = ModernScrollbar(card, command=scroll_canvas.yview)
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        scroll_canvas.pack(side="left", fill="both", expand=True)
+
+        inner = tk.Frame(scroll_canvas, bg=BG_CARD, padx=22, pady=16)
+        inner_id = scroll_canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_configure(e):
+            scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
+
+        def _on_canvas_configure(e):
+            scroll_canvas.itemconfig(inner_id, width=e.width)
+
+        inner.bind("<Configure>", _on_inner_configure)
+        scroll_canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(e):
+            scroll_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+        def _bind_wheel(e):
+            scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_wheel(e):
+            scroll_canvas.unbind_all("<MouseWheel>")
+
+        scroll_canvas.bind("<Enter>", _bind_wheel)
+        scroll_canvas.bind("<Leave>", _unbind_wheel)
+
+        tk.Label(inner, text="블로그 설정", font=F_TITLE, bg=BG_CARD,
+                 fg=FG, anchor="w").pack(fill="x")
+        _sep(inner)
+
+        tk.Label(inner,
+                 text="네이버 로그인 정보를 설정하세요. "
+                      "발행 시작 시 상품 검색 → Gemini 요약 → 네이버 블로그 포스팅이 진행됩니다.",
+                 font=F_SM, bg=BG_CARD, fg=FG_LABEL, anchor="w",
+                 wraplength=380, justify="left").pack(fill="x", pady=(0, 10))
+
+        form = tk.Frame(inner, bg=BG_CARD)
+        form.pack(fill="x")
+        form.columnconfigure(1, weight=1)
+
+        r = 0
+        self._lbl(form, "네이버 아이디:", r)
+        idf = tk.Frame(form, bg=BG_CARD)
+        idf.grid(row=r, column=1, sticky="ew", pady=8)
+        self.blog_naver_id_var = tk.StringVar()
+        _entry(idf, self.blog_naver_id_var).pack(fill="x")
+
+        r += 1
+        self._lbl(form, "네이버 비밀번호:", r)
+        pwf = tk.Frame(form, bg=BG_CARD)
+        pwf.grid(row=r, column=1, sticky="ew", pady=8)
+        self.blog_naver_pw_var = tk.StringVar()
+        _entry(pwf, self.blog_naver_pw_var, show="●").pack(fill="x")
+
+        r += 1; _grid_sep(form, r, title="다중아이디 설정")
+        r += 1
+        self._lbl(form, "다중아이디 사용:", r)
+        maf = tk.Frame(form, bg=BG_CARD)
+        maf.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_multi_account_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            maf, text="활성화",
+            variable=self.blog_multi_account_var,
+            font=F_SM, bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+            selectcolor=BG_CARD,
+        ).pack(side="left")
+        tk.Label(maf, text=" (아이디 탭 비밀번호 형식 txt 파일)", font=F_SM,
+                 bg=BG_CARD, fg=FG_DIM).pack(side="left")
+        r += 1
+        self._lbl(form, "아이디 파일:", r)
+        maf2 = tk.Frame(form, bg=BG_CARD)
+        maf2.grid(row=r, column=1, sticky="ew", pady=8)
+        maf2.columnconfigure(0, weight=1)
+        self.blog_multi_account_file_var = tk.StringVar()
+        _entry(maf2, self.blog_multi_account_file_var, readonly=True).pack(
+            fill="x", pady=(0, 4))
+        _soft_btn(maf2, "파일 불러오기", self._browse_blog_multi_account_file).pack(anchor="w")
+        r += 1
+        self._lbl(form, "아이디 교체 대기시간:", r)
+        maf3 = tk.Frame(form, bg=BG_CARD)
+        maf3.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_account_switch_wait_var = tk.IntVar(value=5)
+        tk.Spinbox(maf3, from_=1, to=1440, width=8,
+                   textvariable=self.blog_account_switch_wait_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", ipady=4)
+        tk.Label(maf3, text=" 분  (다음 아이디 로그인 전 대기)", font=F_SM,
+                 bg=BG_CARD, fg=FG_DIM).pack(side="left")
+        r += 1
+        self._lbl(form, "무한반복실행:", r)
+        maf4 = tk.Frame(form, bg=BG_CARD)
+        maf4.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_infinite_loop_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            maf4, text="모든 아이디 사용 후 첫 아이디부터 반복",
+            variable=self.blog_infinite_loop_var,
+            font=F_SM, bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+            selectcolor=BG_CARD,
+        ).pack(side="left")
+
+        r += 1; _grid_sep(form, r, title="포스팅 설정")
+
+        r += 1
+        self._lbl(form, "발행 개수:", r)
+        pcf = tk.Frame(form, bg=BG_CARD)
+        pcf.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_post_count_var = tk.IntVar(value=10)
+        tk.Spinbox(pcf, from_=2, to=999, width=8,
+                   textvariable=self.blog_post_count_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", ipady=4)
+        tk.Label(pcf, text="  건", font=F_SM, bg=BG_CARD,
+                 fg=FG_DIM).pack(side="left")
+
+        r += 1
+        self._lbl(form, "포스팅 주기:", r)
+        ivf = tk.Frame(form, bg=BG_CARD)
+        ivf.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_interval_min_var = tk.IntVar(value=5)
+        self.blog_interval_max_var = tk.IntVar(value=30)
+        tk.Spinbox(ivf, from_=1, to=1440, width=6,
+                   textvariable=self.blog_interval_min_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", ipady=4)
+        tk.Label(ivf, text=" ~ ", font=F_SM, bg=BG_CARD, fg=FG_DIM).pack(side="left")
+        tk.Spinbox(ivf, from_=1, to=1440, width=6,
+                   textvariable=self.blog_interval_max_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", ipady=4)
+        tk.Label(ivf, text="  분  (랜덤)", font=F_SM, bg=BG_CARD,
+                 fg=FG_DIM).pack(side="left")
+
+        r += 1
+        self._lbl(form, "제목 키워드:", r)
+        pnf = tk.Frame(form, bg=BG_CARD)
+        pnf.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_use_product_name_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            pnf, text="업체제품명 사용",
+            variable=self.blog_use_product_name_var,
+            font=F_SM, bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+            selectcolor=BG_CARD,
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(pnf, text="(제목에 검색된 상품명 사용)",
+                 font=F_SM, bg=BG_CARD, fg=FG_DIM).grid(row=1, column=0, sticky="w")
+
+        r += 1
+        self._lbl(form, "키워드 반복 횟수:", r)
+        ckf = tk.Frame(form, bg=BG_CARD)
+        ckf.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_kw_repeat_min_var = tk.IntVar(value=3)
+        self.blog_kw_repeat_max_var = tk.IntVar(value=7)
+        tk.Label(ckf, text="최소", font=F_SM, bg=BG_CARD,
+                 fg=FG_LABEL).pack(side="left")
+        tk.Spinbox(ckf, from_=0, to=20, width=8,
+                   textvariable=self.blog_kw_repeat_min_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", padx=(6, 12), ipady=4)
+        tk.Label(ckf, text="~ 최대", font=F_SM, bg=BG_CARD,
+                 fg=FG_LABEL).pack(side="left")
+        tk.Spinbox(ckf, from_=0, to=20, width=8,
+                   textvariable=self.blog_kw_repeat_max_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", padx=(6, 12), ipady=4)
+        tk.Label(ckf, text="회", font=F_SM, bg=BG_CARD,
+                 fg=FG_DIM).pack(side="left")
+
+        r += 1; _grid_sep(form, r, title="본문 설정")
+
+        r += 1
+        self._lbl(form, "줄바꿈 (모바일):", r)
+        lbf = tk.Frame(form, bg=BG_CARD)
+        lbf.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_linebreak_var = tk.BooleanVar(value=False)
+        self.blog_linebreak_cb = tk.Checkbutton(
+            lbf, text="사용", variable=self.blog_linebreak_var,
+            font=F, bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+            selectcolor=BG_CARD, command=self._toggle_blog_linebreak,
+        )
+        self.blog_linebreak_cb.pack(side="left")
+        self.blog_maxchars_frame = tk.Frame(lbf, bg=BG_CARD)
+        tk.Label(self.blog_maxchars_frame, text="  한줄 최대:", font=F_SM,
+                 bg=BG_CARD, fg=FG_LABEL).pack(side="left")
+        self.blog_maxchars_var = tk.IntVar(value=45)
+        tk.Spinbox(self.blog_maxchars_frame, from_=20, to=100, width=6,
+                   textvariable=self.blog_maxchars_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   ).pack(side="left", padx=(4, 0), ipady=3)
+        tk.Label(self.blog_maxchars_frame, text=" 자", font=F_SM,
+                 bg=BG_CARD, fg=FG_DIM).pack(side="left")
+
+        r += 1
+        self._lbl(form, "글자 배경색 적용 줄수:", r)
+        bgf = tk.Frame(form, bg=BG_CARD)
+        bgf.grid(row=r, column=1, sticky="w", pady=8)
+        self.blog_bg_highlight_var = tk.IntVar(value=0)
+        tk.Spinbox(bgf, from_=0, to=20, width=8,
+                   textvariable=self.blog_bg_highlight_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", ipady=4)
+        tk.Label(bgf, text="  줄  (0=미적용)", font=F_SM, bg=BG_CARD,
+                 fg=FG_DIM).pack(side="left")
+
+        r += 1
+        self._lbl(form, "쿠팡 파트너스 수수료 이미지:", r)
+        cif = tk.Frame(form, bg=BG_CARD)
+        cif.grid(row=r, column=1, sticky="ew", pady=8)
+        self.blog_commission_image_folder_var = tk.StringVar()
+        _entry(cif, self.blog_commission_image_folder_var, readonly=True).pack(
+            fill="x", pady=(0, 4))
+        _soft_btn(cif, "찾아보기...", self._browse_blog_commission_image_folder).pack(
+            anchor="w")
+        r += 1
+        tk.Label(form, text="(본문 하단에 삽입. 폴더 내 사진 중 랜덤 1장)",
+                 font=F_SM, bg=BG_CARD, fg=FG_DIM, wraplength=280).grid(
+            row=r, column=1, sticky="w", padx=(0, 8))
+
+        tk.Label(inner, text="(상품 검색 탭의 키워드·API Key 사용)", font=F_SM,
+                 bg=BG_CARD, fg=FG_DIM, anchor="w").pack(fill="x", ipady=6)
+
+        self._load_blog_settings()
+        self._toggle_blog_linebreak()
+
+    def _toggle_blog_linebreak(self):
+        """블로그 줄바꿈 설정 토글 — 체크 시 최대 글자수 입력 표시."""
+        if getattr(self, "blog_linebreak_var", None) and self.blog_linebreak_var.get():
+            if hasattr(self, "blog_maxchars_frame"):
+                self.blog_maxchars_frame.pack(side="left")
+        else:
+            if hasattr(self, "blog_maxchars_frame"):
+                self.blog_maxchars_frame.pack_forget()
+
+    def _load_accounts_from_file(self, path):
+        """txt 파일에서 아이디/비밀번호 로드. 형식: 아이디[TAB]비밀번호 (한 줄에 하나)"""
+        accounts = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split("\t", 1)
+                    if len(parts) >= 2:
+                        aid, apw = parts[0].strip(), parts[1].strip()
+                        if aid and apw:
+                            accounts.append({"id": aid, "pw": apw})
+        except Exception:
+            pass
+        return accounts
+
+    def _browse_blog_multi_account_file(self):
+        p = filedialog.askopenfilename(
+            title="다중아이디 파일 선택 (아이디 탭 비밀번호 형식)",
+            filetypes=[("텍스트 파일", "*.txt"), ("모든 파일", "*.*")],
+        )
+        if p:
+            self.blog_multi_account_file_var.set(p)
+            cnt = len(self._load_accounts_from_file(p))
+            if cnt > 0:
+                self._blog_log(f"[다중아이디] {cnt}개 계정 로드: {p}")
+            else:
+                self._blog_log(f"[다중아이디] 유효한 계정 없음 (형식: 아이디[TAB]비밀번호): {p}")
+
+    def _browse_cafe_multi_account_file(self):
+        p = filedialog.askopenfilename(
+            title="다중아이디 파일 선택 (아이디 탭 비밀번호 형식)",
+            filetypes=[("텍스트 파일", "*.txt"), ("모든 파일", "*.*")],
+        )
+        if p:
+            self.cafe_multi_account_file_var.set(p)
+            cnt = len(self._load_accounts_from_file(p))
+            if cnt > 0:
+                self._cafe_log(f"[다중아이디] {cnt}개 계정 로드: {p}")
+            else:
+                self._cafe_log(f"[다중아이디] 유효한 계정 없음 (형식: 아이디[TAB]비밀번호): {p}")
+
+    def _browse_blog_commission_image_folder(self):
+        p = filedialog.askdirectory(title="쿠팡 파트너스 수수료 이미지 폴더 선택")
+        if p:
+            self.blog_commission_image_folder_var.set(p)
+            self._blog_log(f"[설정] 수수료 이미지 폴더: {p}")
+
+    def _build_blog_log(self, parent):
+        sh, card = _card(parent, auto_height=False)
+        sh.grid(row=0, column=1, sticky="nsew")
+
+        tk.Label(card, text="활동 내역", font=F_SEC, bg=BG_CARD,
+                 fg=FG, anchor="w").pack(fill="x", padx=12, pady=(12, 4))
+        _sep(card)
+
+        self.blog_log_text = tk.Text(
+            card, font=F_LOG, bg=LOG_BG, fg=LOG_FG,
+            relief="flat", wrap="word", state="disabled",
+            highlightthickness=0, padx=10, pady=10,
+        )
+        self.blog_log_text.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+
+        self.blog_progress_var = tk.StringVar(value="대기 중")
+        tk.Label(card, textvariable=self.blog_progress_var, font=F_SM,
+                 bg=BG_CARD, fg=FG_LABEL, anchor="w").pack(fill="x", padx=12, pady=(0, 8))
+
+    def _blog_log(self, msg):
+        if "[AGENT]" in msg or "[BLOG]" in msg or "[CAFE]" in msg or "[에이전트]" in msg:
+            self.append_log_global(msg)
+        def _do():
+            t = self.blog_log_text
+            t.config(state="normal")
+            t.insert("end", msg + "\n")
+            t.see("end")
+            t.config(state="disabled")
+        if self.root.winfo_exists():
+            self.root.after(0, _do)
+
+    def _clear_blog_log(self):
+        self.blog_log_text.config(state="normal")
+        self.blog_log_text.delete("1.0", "end")
+        self.blog_log_text.config(state="disabled")
+        self.blog_progress_var.set("대기 중")
+
+    def _save_blog_settings(self, silent=False):
+        """silent=True: 자동재시작 시 확인 메시지 없이 저장"""
+        try:
+            data = {
+                "blog_naver_id": self.blog_naver_id_var.get(),
+                "blog_naver_pw": self.blog_naver_pw_var.get(),
+                "blog_interval_min": self.blog_interval_min_var.get(),
+                "blog_interval_max": self.blog_interval_max_var.get(),
+                "blog_auto_start_cafe": self.blog_auto_start_cafe_var.get(),
+                "blog_post_count": self.blog_post_count_var.get(),
+                "blog_use_product_name": self.blog_use_product_name_var.get(),
+                "blog_kw_repeat_min": self.blog_kw_repeat_min_var.get(),
+                "blog_kw_repeat_max": self.blog_kw_repeat_max_var.get(),
+                "blog_linebreak": self.blog_linebreak_var.get(),
+                "blog_maxchars": self.blog_maxchars_var.get(),
+                "blog_bg_highlight": self.blog_bg_highlight_var.get(),
+                "blog_commission_image_folder": self.blog_commission_image_folder_var.get(),
+                "blog_multi_account": self.blog_multi_account_var.get() if hasattr(self, "blog_multi_account_var") else False,
+                "blog_multi_account_file": self.blog_multi_account_file_var.get() if hasattr(self, "blog_multi_account_file_var") else "",
+                "blog_account_switch_wait": self.blog_account_switch_wait_var.get() if hasattr(self, "blog_account_switch_wait_var") else 5,
+                "blog_infinite_loop": self.blog_infinite_loop_var.get() if hasattr(self, "blog_infinite_loop_var") else False,
+            }
+            path = os.path.join(BASE_DIR, "blog_settings.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            if not silent:
+                messagebox.showinfo("완료", "블로그 설정이 저장되었습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"저장 실패:\n{e}")
+
+    def _load_blog_settings(self):
+        try:
+            path = os.path.join(BASE_DIR, "blog_settings.json")
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.blog_naver_id_var.set(data.get("blog_naver_id", ""))
+                self.blog_naver_pw_var.set(data.get("blog_naver_pw", ""))
+                if "blog_interval_min" in data or "blog_interval_max" in data:
+                    self.blog_interval_min_var.set(int(data.get("blog_interval_min", 5)))
+                    self.blog_interval_max_var.set(int(data.get("blog_interval_max", 30)))
+                else:
+                    old = int(data.get("blog_interval", 5))
+                    self.blog_interval_min_var.set(max(1, old // 2))
+                    self.blog_interval_max_var.set(old)
+                self.blog_auto_start_cafe_var.set(bool(data.get("blog_auto_start_cafe", False)))
+                self.blog_post_count_var.set(max(2, int(data.get("blog_post_count", 10))))
+                self.blog_use_product_name_var.set(bool(data.get("blog_use_product_name", False)))
+                self.blog_kw_repeat_min_var.set(int(data.get("blog_kw_repeat_min", 3)))
+                self.blog_kw_repeat_max_var.set(int(data.get("blog_kw_repeat_max", 7)))
+                self.blog_linebreak_var.set(bool(data.get("blog_linebreak", False)))
+                self.blog_maxchars_var.set(int(data.get("blog_maxchars", 45)))
+                self.blog_bg_highlight_var.set(int(data.get("blog_bg_highlight", 0)))
+                self.blog_commission_image_folder_var.set(data.get("blog_commission_image_folder", ""))
+                if "blog_multi_account" in data:
+                    self.blog_multi_account_var.set(bool(data.get("blog_multi_account", False)))
+                if "blog_multi_account_file" in data:
+                    self.blog_multi_account_file_var.set(data.get("blog_multi_account_file", ""))
+                if "blog_account_switch_wait" in data:
+                    self.blog_account_switch_wait_var.set(int(data.get("blog_account_switch_wait", 5)))
+                if "blog_infinite_loop" in data:
+                    self.blog_infinite_loop_var.set(bool(data.get("blog_infinite_loop", False)))
+        except Exception:
+            pass
+
+    def run_blog_job(self, keywords, gemini_key, accounts):
+        """블로그 포스팅 실제 작업 (백그라운드 스레드에서 호출)"""
+        self.append_log_global("[BLOG] run_blog_job ENTER")
+        self._blog_posting_worker(keywords, gemini_key, accounts)
+
+    def _on_start_blog_posting(self, skip_confirm=False, cmd_id=None, program_username=None):
+        """skip_confirm=True: 자동재시작 시 저장 확인 메시지 없이 진행. cmd_id/program_username: 에이전트 완료 처리용"""
+        self.worker_thread = None
+        self._last_start_error = None
+        if not self._require_login_and_session("blog"):
+            self._last_start_error = "로그인/세션 필요"
+            return
+        if self._agent_exec_var.get():
+            self._agent_apply_config()
+        use_paid = getattr(self, "use_paid_member_keywords_var", None) and self.use_paid_member_keywords_var.get()
+        if use_paid and self._is_admin():
+            try:
+                from supabase_client import fetch_paid_member_keywords_pool
+                post_count = max(2, self.blog_post_count_var.get())
+                keywords = fetch_paid_member_keywords_pool(count=post_count * 2, log=self._blog_log)
+                if not keywords:
+                    self._last_start_error = "유료회원 키워드 없음"
+                    messagebox.showwarning("안내", "유료회원 키워드가 없습니다. Supabase paid_members 테이블을 확인하세요.")
+                    return
+            except Exception as e:
+                self._last_start_error = f"유료회원 키워드 조회 실패: {e}"
+                messagebox.showerror("오류", f"유료회원 키워드 조회 실패:\n{e}")
+                return
+        else:
+            keywords = [k for k in (self.keywords or []) if k and str(k).strip()]
+            if not keywords:
+                self._last_start_error = "키워드 없음"
+                messagebox.showwarning("안내", "키워드를 먼저 '상품 검색' 탭에서 불러오세요.")
+                return
+        multi = getattr(self, "blog_multi_account_var", None) and self.blog_multi_account_var.get()
+        if multi:
+            path = getattr(self, "blog_multi_account_file_var", None) and self.blog_multi_account_file_var.get().strip()
+            if not path or not os.path.isfile(path):
+                self._last_start_error = "다중아이디 파일 없음"
+                messagebox.showwarning("안내", "다중아이디 사용 시 아이디 파일을 불러오세요.")
+                return
+            accounts = self._load_accounts_from_file(path)
+            if not accounts:
+                self._last_start_error = "유효한 계정 없음"
+                messagebox.showwarning("안내", "유효한 계정이 없습니다. 형식: 아이디[TAB]비밀번호 (한 줄에 하나)")
+                return
+        else:
+            nid = self.blog_naver_id_var.get().strip()
+            npw = self.blog_naver_pw_var.get().strip()
+            if not nid or not npw:
+                self._last_start_error = "네이버 아이디/비밀번호 없음"
+                messagebox.showwarning("안내", "네이버 아이디와 비밀번호를 입력해주세요.")
+                return
+            accounts = [{"id": nid, "pw": npw}]
+        gk = self.gemini_key_var.get().strip()
+        if not gk:
+            self._last_start_error = "Gemini API 키 없음"
+            messagebox.showwarning("안내", "Gemini API 키를 입력해주세요.")
+            return
+        try:
+            from blog_poster import run_auto_blogging
+        except ImportError as e:
+            self._last_start_error = f"블로그 모듈 로드 실패: {e}"
+            messagebox.showerror("오류", f"블로그 포스팅 모듈을 불러올 수 없습니다.\n{e}")
+            return
+        self.is_blog_posting = True
+        self._blog_stop_flag = False
+        self._set_status("running", "블로그 포스팅 중...")
+        self._clear_blog_log()
+        self._blog_log("블로그 포스팅 시작...")
+        self._save_blog_settings(silent=skip_confirm)
+        if not use_paid:
+            keywords = [k for k in (self.keywords or []) if k and str(k).strip()]
+        random.shuffle(keywords)
+        self.worker_thread = threading.Thread(
+            target=self.run_blog_job,
+            args=(keywords, gk, accounts),
+            daemon=True
+        )
+        self.worker_thread.start()
+        self.append_log_global("[AGENT] blog worker thread started")
+
+    def _blog_posting_worker(self, keywords, gemini_key, accounts):
+        """accounts: [{"id", "pw"}, ...] — 다중아이디 시 여러 계정, 단일 시 1개"""
+        self._blog_log("[BLOG] worker started")
+        import time
+        try:
+            from blog_poster import run_auto_blogging
+            post_count = max(2, self.blog_post_count_var.get())
+            iv_min = max(1, self.blog_interval_min_var.get())
+            iv_max = max(iv_min, self.blog_interval_max_var.get())
+            multi = getattr(self, "blog_multi_account_var", None) and self.blog_multi_account_var.get()
+            infinite = getattr(self, "blog_infinite_loop_var", None) and self.blog_infinite_loop_var.get()
+            wait_min = max(1, getattr(self, "blog_account_switch_wait_var", None) and self.blog_account_switch_wait_var.get() or 5)
+
+            paid_members = []
+            try:
+                from supabase_client import fetch_paid_members
+                self._blog_log("[Supabase] 유료회원 목록 조회 중...")
+                paid_members = fetch_paid_members(log=self._blog_log)
+            except ImportError:
+                self._blog_log("[Supabase] supabase 패키지 미설치 — 본인 글만 발행합니다.")
+            except Exception as e:
+                self._blog_log(f"[Supabase] 조회 실패: {e} — 본인 글만 발행합니다.")
+
+            referrer = None
+            program_username = ""
+            coupang_ak, coupang_sk = None, None
+            try:
+                from auth import get_session
+                from supabase_client import fetch_referrer, fetch_user_coupang_keys
+                s = get_session()
+                program_username = (s or {}).get("username", "") or ""
+                rid = (s or {}).get("referrer_id") if s else None
+                if rid:
+                    self._blog_log(f"[Supabase] 추천인 '{rid}' 조회 중...")
+                    referrer = fetch_referrer(rid, log=self._blog_log)
+                # 본인글용 쿠팡 API 키: users 테이블 우선 (SaaS에서 설정)
+                keys = fetch_user_coupang_keys(program_username, log=self._blog_log)
+                if keys:
+                    coupang_ak, coupang_sk = keys[0], keys[1]
+            except Exception as e:
+                self._blog_log(f"[Supabase] 조회 실패: {e}")
+            if not coupang_ak or not coupang_sk:
+                coupang_ak = self.coupang_ak_var.get().strip() or None
+                coupang_sk = self.coupang_sk_var.get().strip() or None
+
+            account_idx = 0
+            total_success, total_fail, total_done = 0, 0, 0
+            self.append_log_global("[BLOG] entering work loop")
+            while True:
+                if getattr(self, "_blog_stop_flag", False):
+                    self._blog_log("[중지] 사용자가 작업을 중지했습니다.")
+                    break
+                acc = accounts[account_idx]
+                nid, npw = acc["id"], acc["pw"]
+                kw_list = keywords
+                if multi and len(accounts) > 1:
+                    self._blog_log(f"\n[다중아이디] {account_idx + 1}/{len(accounts)}번째 계정: {nid}")
+                result = run_auto_blogging(
+                    login_id=nid,
+                    password=npw,
+                    keywords=kw_list,
+                    program_username=program_username,
+                    gemini_api_key=gemini_key,
+                    log=self._blog_log,
+                    posting_interval_min=iv_min,
+                    posting_interval_max=iv_max,
+                    image_save_dir=self.img_dir_var.get().strip(),
+                    keyword_repeat_min=self.blog_kw_repeat_min_var.get(),
+                    keyword_repeat_max=self.blog_kw_repeat_max_var.get(),
+                    coupang_access_key=coupang_ak,
+                    coupang_secret_key=coupang_sk,
+                    stop_flag=lambda: getattr(self, "_blog_stop_flag", False),
+                    post_count=post_count,
+                    use_product_name=self.blog_use_product_name_var.get(),
+                    linebreak_enabled=self.blog_linebreak_var.get(),
+                    linebreak_max_chars=self.blog_maxchars_var.get(),
+                    commission_image_folder=self.blog_commission_image_folder_var.get().strip() or None,
+                    bg_highlight_lines=self.blog_bg_highlight_var.get(),
+                    paid_members=paid_members,
+                    referrer=referrer,
+                    category=self.selected_category.get() if hasattr(self, "selected_category") else "건강식품",
+                )
+                success = result.get("success", 0)
+                fail = result.get("fail", 0)
+                total = result.get("total", 0)
+                total_success += success
+                total_fail += fail
+                total_done += total
+                self.root.after(0, lambda s=success, f=fail, t=total: self._blog_log(f"\n완료: 성공 {s} / 실패 {f} / 총 {t}"))
+
+                if getattr(self, "_blog_stop_flag", False):
+                    break
+                account_idx += 1
+                if account_idx >= len(accounts):
+                    if infinite:
+                        account_idx = 0
+                        self._blog_log(f"\n[무한반복] 첫 아이디부터 재시작. {wait_min}분 대기...")
+                    else:
+                        break
+                if account_idx < len(accounts) or (infinite and account_idx == 0):
+                    self._blog_log(f"\n[다중아이디] 다음 계정으로 전환. {wait_min}분 대기...")
+                    wait_sec = min(wait_min * 60, 3600)
+                    for _ in range(wait_sec):
+                        if getattr(self, "_blog_stop_flag", False):
+                            break
+                        time.sleep(1)
+
+            self.append_log_global("[BLOG] work loop exited")
+            self.root.after(0, lambda: self._set_status("done", f"블로그 포스팅 완료: {total_success}/{total_done}"))
+            if getattr(self, "blog_auto_start_cafe_var", None) and self.blog_auto_start_cafe_var.get():
+                self.root.after(500, lambda: self._on_start_posting(skip_confirm=True))
+            elif getattr(self, "_auto_restart_pending_cafe", False):
+                self._auto_restart_pending_cafe = False
+                self.root.after(500, lambda: self._on_start_posting(skip_confirm=True))
+            elif getattr(self, "_auto_restart_enabled", False):
+                self.root.after(0, self._schedule_auto_restart)
+        except Exception as e:
+            self.root.after(0, lambda: self._blog_log(f"오류: {e}"))
+            self.root.after(0, lambda: self._set_status("error", str(e)))
+            if getattr(self, "_auto_restart_enabled", False):
+                self.root.after(0, self._schedule_auto_restart)
+        finally:
+            self.root.after(0, lambda: setattr(self, "is_blog_posting", False))
+            self.root.after(0, lambda: setattr(self, "is_running", False))
+
+    def _on_stop_blog_posting(self):
+        self._blog_stop_flag = True
+        self._blog_log("[중지] 블로그 포스팅 중지 요청됨...")
+
+    # ═══════════════════════════════════════════════
+    # PAGE 3 — 카페 포스팅
     # ═══════════════════════════════════════════════
     def _build_cafe_page(self):
         self.pg_cafe = tk.Frame(self.main_container, bg=BG)
@@ -1158,7 +1907,7 @@ class App:
             ("설정 불러오기",     POINT,  POINT_H,  self._load_cafe_settings),
             ("발행 시작 ▶",      GREEN,  GREEN_H,  self._on_start_posting),
             ("발행 중지",         RED,    RED_H,    self._on_stop_posting),
-            ("로그 지우기",       ORANGE, ORANGE_H, self._clear_cafe_log),
+            ("카페가입도우미",    PURPLE, PURPLE_H, self._open_cafe_autojoin),
         ]:
             _action_btn(bar, f" {txt} ", c, h, cmd).pack(
                 side="left", padx=(0, 4))
@@ -1243,6 +1992,56 @@ class App:
         _soft_btn(pwf, "표시", self._toggle_naver_pw).pack(
             side="left", padx=(4, 0))
 
+        r += 1; _grid_sep(form, r, title="다중아이디 설정")
+        r += 1
+        self._lbl(form, "다중아이디 사용:", r)
+        maf = tk.Frame(form, bg=BG_CARD)
+        maf.grid(row=r, column=1, sticky="w", pady=8)
+        self.cafe_multi_account_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            maf, text="활성화",
+            variable=self.cafe_multi_account_var,
+            font=F_SM, bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+            selectcolor=BG_CARD,
+        ).pack(side="left")
+        tk.Label(maf, text=" (아이디 탭 비밀번호 형식 txt 파일)", font=F_SM,
+                 bg=BG_CARD, fg=FG_DIM).pack(side="left")
+        r += 1
+        self._lbl(form, "아이디 파일:", r)
+        maf2 = tk.Frame(form, bg=BG_CARD)
+        maf2.grid(row=r, column=1, sticky="ew", pady=8)
+        maf2.columnconfigure(0, weight=1)
+        self.cafe_multi_account_file_var = tk.StringVar()
+        _entry(maf2, self.cafe_multi_account_file_var, readonly=True).pack(
+            fill="x", pady=(0, 4))
+        _soft_btn(maf2, "파일 불러오기", self._browse_cafe_multi_account_file).pack(anchor="w")
+        r += 1
+        self._lbl(form, "아이디 교체 대기시간:", r)
+        maf3 = tk.Frame(form, bg=BG_CARD)
+        maf3.grid(row=r, column=1, sticky="w", pady=8)
+        self.cafe_account_switch_wait_var = tk.IntVar(value=5)
+        tk.Spinbox(maf3, from_=1, to=1440, width=8,
+                   textvariable=self.cafe_account_switch_wait_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", ipady=4)
+        tk.Label(maf3, text=" 분  (다음 아이디 로그인 전 대기)", font=F_SM,
+                 bg=BG_CARD, fg=FG_DIM).pack(side="left")
+        r += 1
+        self._lbl(form, "무한반복실행:", r)
+        maf4 = tk.Frame(form, bg=BG_CARD)
+        maf4.grid(row=r, column=1, sticky="w", pady=8)
+        self.cafe_infinite_loop_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            maf4, text="모든 아이디 사용 후 첫 아이디부터 반복",
+            variable=self.cafe_infinite_loop_var,
+            font=F_SM, bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+            selectcolor=BG_CARD,
+        ).pack(side="left")
+
         r += 1; _grid_sep(form, r, title="API / 파일 설정")
 
         r += 1
@@ -1318,7 +2117,7 @@ class App:
         pcf.grid(row=r, column=1, sticky="w", pady=8)
 
         self.cafe_post_count_var = tk.IntVar(value=10)
-        tk.Spinbox(pcf, from_=1, to=999, width=8,
+        tk.Spinbox(pcf, from_=2, to=999, width=8,
                    textvariable=self.cafe_post_count_var,
                    font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
                    buttonbackground=BG_HEADER,
@@ -1334,16 +2133,26 @@ class App:
         ivf = tk.Frame(form, bg=BG_CARD)
         ivf.grid(row=r, column=1, sticky="w", pady=8)
 
-        self.cafe_interval_var = tk.IntVar(value=60)
-        tk.Spinbox(ivf, from_=1, to=1440, width=8,
-                   textvariable=self.cafe_interval_var,
+        self.cafe_interval_min_var = tk.IntVar(value=5)
+        self.cafe_interval_max_var = tk.IntVar(value=30)
+        tk.Spinbox(ivf, from_=1, to=1440, width=6,
+                   textvariable=self.cafe_interval_min_var,
                    font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
                    buttonbackground=BG_HEADER,
                    highlightthickness=2, highlightbackground=BD,
                    highlightcolor=BD_FOCUS,
                    selectbackground="#cfe8ff", selectforeground=FG,
                    ).pack(side="left", ipady=4)
-        tk.Label(ivf, text="  분  (1~1440)", font=F_SM, bg=BG_CARD,
+        tk.Label(ivf, text=" ~ ", font=F_SM, bg=BG_CARD, fg=FG_DIM).pack(side="left")
+        tk.Spinbox(ivf, from_=1, to=1440, width=6,
+                   textvariable=self.cafe_interval_max_var,
+                   font=F, bg=BG_INPUT, fg=FG, relief="flat", bd=0,
+                   buttonbackground=BG_HEADER,
+                   highlightthickness=2, highlightbackground=BD,
+                   highlightcolor=BD_FOCUS,
+                   selectbackground="#cfe8ff", selectforeground=FG,
+                   ).pack(side="left", ipady=4)
+        tk.Label(ivf, text="  분  (랜덤)", font=F_SM, bg=BG_CARD,
                  fg=FG_DIM).pack(side="left")
 
         r += 1
@@ -1932,6 +2741,113 @@ class App:
 
         _action_btn(card, " 리스트에 추가 ", GREEN, GREEN_H, _on_add_to_list).pack(pady=(4, 16))
 
+    def _open_cafe_autojoin(self):
+        """카페가입도우미 — 도우미 카페 리스트로 자동 가입 (cafe_autojoin 모듈)"""
+        nid = self.naver_id_var.get().strip()
+        npw = self.naver_pw_var.get().strip()
+        if not nid or not npw:
+            messagebox.showwarning("안내", "네이버 아이디와 비밀번호를 먼저 입력해주세요.")
+            return
+        # helper_cafes 테이블의 cafe_url 필드 사용 (Supabase helper_cafes)
+        cafes = getattr(self, "helper_cafes", [])
+        if not cafes:
+            messagebox.showwarning("안내", "가입할 카페가 없습니다.\n'도우미 적용'으로 서버 카페리스트를 불러오세요.")
+            return
+        dlg = tk.Toplevel(self.root)
+        dlg.title("카페가입도우미")
+        dlg.configure(bg=BG)
+        dlg.resizable(True, True)
+        dlg.geometry("420x280")
+        pad = 16
+        sh, card = _card(dlg, pad=pad)
+        sh.pack(fill="both", expand=True, padx=pad, pady=pad)
+        tk.Label(card, text="카페가입도우미", font=F_TITLE, bg=BG_CARD, fg=FG).pack(anchor="w", pady=(0, 8))
+        _sep(card)
+        tk.Label(card, text=f"가입 대상: {len(cafes)}개 카페", font=F_SM, bg=BG_CARD, fg=FG_LABEL).pack(anchor="w", pady=(0, 4))
+        tk.Label(card, text="가입 질문 기본 답변 (미입력 시 '넵.알겠습니다.'):", font=F_SM, bg=BG_CARD, fg=FG_LABEL).pack(anchor="w", pady=(8, 4))
+        join_answer_var = tk.StringVar(value=getattr(self, "_cafe_autojoin_join_answer", "") or "넵.알겠습니다.")
+        _entry(card, join_answer_var).pack(fill="x", pady=(0, 8))
+        tk.Label(card, text="2captcha API 키 (캡챠 해독용, 없으면 캡챠 시 스킵):", font=F_SM, bg=BG_CARD, fg=FG_LABEL).pack(anchor="w", pady=(8, 4))
+        captcha_var = tk.StringVar(value=getattr(self, "_cafe_autojoin_captcha_key", "") or "")
+        _entry(card, captcha_var, show="●").pack(fill="x", pady=(0, 12))
+        stop_flag = {"v": False}
+        driver_holder = {}
+
+        def _on_start():
+            try:
+                stop_flag["v"] = False
+                self._cafe_log("[카페가입도우미] 시작 — 네이버 로그인 후 카페 순회")
+                def _run():
+                    try:
+                        from cafe_autojoin import run_helper_cafe_join
+                        def _log(msg):
+                            try:
+                                self.root.after(0, lambda m=msg: self._cafe_log(m))
+                            except Exception:
+                                pass
+                        def _progress(p, t):
+                            try:
+                                self.root.after(0, lambda pp=p, tt=t: self._update_cafe_progress(pp, tt))
+                            except Exception:
+                                pass
+                        run_helper_cafe_join(
+                            naver_id=nid,
+                            naver_pw=npw,
+                            helper_cafes=cafes,
+                            captcha_api_key=captcha_var.get().strip() or None,
+                            join_answer_text=join_answer_var.get().strip() or None,
+                            log=_log,
+                            stop_flag=lambda: stop_flag["v"],
+                            driver_holder=driver_holder,
+                            on_progress=_progress,
+                            on_joined=lambda joined: self.root.after(0, lambda: (self._cafe_log(f"[카페가입도우미] {len(joined)}개 가입 완료 → 포스팅 리스트에 반영"), self._merge_joined_to_cafe_list(joined))),
+                        )
+                        self.root.after(0, lambda: self._cafe_log("[카페가입도우미] 작업 완료"))
+                    except Exception as e:
+                        import traceback
+                        traceback.print_exc()
+                        self.root.after(0, lambda err=str(e): self._cafe_log(f"[카페가입도우미] 오류: {err}"))
+                        self.root.after(0, lambda err=str(e): messagebox.showerror("카페가입도우미 오류", str(err), parent=dlg))
+                threading.Thread(target=_run, daemon=True).start()
+            except Exception as e:
+                messagebox.showerror("오류", f"시작 실패: {e}", parent=dlg)
+
+        def _on_stop():
+            stop_flag["v"] = True
+            self._cafe_log("[카페가입도우미] 중지 요청")
+            try:
+                from cafe_poster import safe_quit_driver
+                d = driver_holder.get("driver")
+                if d:
+                    safe_quit_driver(d)
+                    driver_holder["driver"] = None
+            except Exception:
+                pass
+
+        def _save_settings():
+            self._cafe_autojoin_captcha_key = captcha_var.get().strip()
+            self._cafe_autojoin_join_answer = join_answer_var.get().strip()
+
+        btn_row = tk.Frame(card, bg=BG_CARD)
+        btn_row.pack(fill="x", pady=(12, 0))
+        _action_btn(btn_row, " 시작 ", GREEN, GREEN_H, lambda: (_save_settings(), _on_start())).pack(side="left", padx=(0, 8))
+        _action_btn(btn_row, " 중지 ", RED, RED_H, _on_stop).pack(side="left")
+
+    def _merge_joined_to_cafe_list(self, joined):
+        """가입 완료된 카페를 포스팅 리스트에 병합 (중복 제외)"""
+        for j in joined:
+            cid = j.get("cafe_id")
+            mid = j.get("menu_id", "")
+            if not cid:
+                continue
+            exists = any(c.get("cafe_id") == cid for c in self.cafe_list)
+            if not exists:
+                self.cafe_list.append({"cafe_id": cid, "menu_id": mid})
+        self.cafe_listbox.delete(0, "end")
+        for i, c in enumerate(self.cafe_list, 1):
+            self.cafe_listbox.insert("end", f"  {i:>3}    {c['cafe_id']:<20}  {c['menu_id']}")
+        self.cafe_count_label.config(text=f"{len(self.cafe_list)}개 카페 등록됨")
+
     def _load_cafe_list_file(self, path):
         from cafe_poster import load_cafe_list
         try:
@@ -2002,14 +2918,24 @@ class App:
             self.helper_cafe_count_label.config(text="(서버에서 불러옴)")
 
     def _on_helper_apply(self):
-        """서버에서 카페리스트를 가져와 포스팅용 리스트에 적용"""
+        """서버에서 카페리스트를 가져와 포스팅용 리스트에 적용.
+        로그인 시: agent_cafe_lists에서 status=saved/joined 조회 (자기 아이디 것만)
+        미로그인 시: helper_cafes (기존)"""
         if self.helper_cafe_mode_var.get() != "all":
             messagebox.showinfo("안내", "'모두사용'을 선택한 후 적용해주세요.")
             return
         def _do():
             try:
-                from supabase_client import fetch_helper_cafes
-                cafes = fetch_helper_cafes()
+                from auth import get_session
+                from supabase_client import fetch_helper_cafes, fetch_agent_cafe_lists
+                s = get_session()
+                un = (s or {}).get("username", "").strip() if s else ""
+                if un:
+                    cafes = fetch_agent_cafe_lists(un, statuses=["saved", "joined"])
+                    if not cafes:
+                        cafes = fetch_helper_cafes()
+                else:
+                    cafes = fetch_helper_cafes()
                 self.root.after(0, lambda: self._apply_helper_cafes(cafes))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("오류", f"서버에서 카페리스트를 가져오지 못했습니다:\n{e}"))
@@ -2026,7 +2952,8 @@ class App:
         if not cafes:
             messagebox.showwarning("안내", "서버에 등록된 카페가 없습니다.")
             return
-        self.cafe_list = [{"cafe_id": c["cafe_id"], "menu_id": c["menu_id"]} for c in cafes]
+        valid = [c for c in cafes if (c.get("cafe_id") or "").strip() and (c.get("menu_id") or "").strip()]
+        self.cafe_list = [{"cafe_id": c["cafe_id"], "menu_id": c["menu_id"]} for c in valid]
         self.cafe_listbox.delete(0, "end")
         for i, c in enumerate(self.cafe_list, 1):
             self.cafe_listbox.insert("end", f"  {i:>3}    {c['cafe_id']:<20}  {c['menu_id']}")
@@ -2064,18 +2991,13 @@ class App:
             self._save_cafe_urls_to_file(cafes, path, "전체")
 
     def _save_cafe_urls_to_file(self, cafes, path, label):
-        """카페 글쓰기 URL을 텍스트 파일로 저장 (cafe_id, menu_id 있으면 글쓰기 URL, 없으면 cafe_url)"""
+        """서버 cafe_url만 텍스트 파일로 저장 (카페 주소만, 글쓰기 경로 제외)"""
         try:
             urls = []
             for c in cafes:
-                cid = (c.get("cafe_id") or "").strip()
-                mid = (c.get("menu_id") or "").strip()
-                if cid and mid:
-                    urls.append(f"https://cafe.naver.com/ca-fe/cafes/{cid}/menus/{mid}/articles/write?boardType=L")
-                else:
-                    u = (c.get("cafe_url") or "").strip()
-                    if u:
-                        urls.append(u)
+                u = (c.get("cafe_url") or "").strip()
+                if u:
+                    urls.append(u)
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(urls))
             self._cafe_log(f"[도우미] {label} 카페리스트 {len(urls)}개 저장됨 ← {path}")
@@ -2092,7 +3014,8 @@ class App:
             "naver_pw": self.naver_pw_var.get().strip(),
             "cafe_file": self.cafe_file_var.get(),
             "cafe_list": self.cafe_list,
-            "posting_interval": self.cafe_interval_var.get(),
+            "posting_interval_min": self.cafe_interval_min_var.get(),
+            "posting_interval_max": self.cafe_interval_max_var.get(),
             "post_count": self.cafe_post_count_var.get(),
             "linebreak_enabled": self.cafe_linebreak_var.get(),
             "linebreak_max_chars": self.cafe_maxchars_var.get(),
@@ -2105,7 +3028,13 @@ class App:
             "auto_restart_enabled": self._auto_restart_enabled,
             "auto_restart_hour": self._auto_restart_hour,
             "auto_restart_minute": self._auto_restart_minute,
+            "auto_restart_blog": self._auto_restart_blog,
+            "auto_restart_cafe": self._auto_restart_cafe,
             "helper_cafe_mode": self.helper_cafe_mode_var.get(),
+            "cafe_multi_account": self.cafe_multi_account_var.get() if hasattr(self, "cafe_multi_account_var") else False,
+            "cafe_multi_account_file": self.cafe_multi_account_file_var.get() if hasattr(self, "cafe_multi_account_file_var") else "",
+            "cafe_account_switch_wait": self.cafe_account_switch_wait_var.get() if hasattr(self, "cafe_account_switch_wait_var") else 5,
+            "cafe_infinite_loop": self.cafe_infinite_loop_var.get() if hasattr(self, "cafe_infinite_loop_var") else False,
         }
         with open(CAFE_SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -2131,8 +3060,14 @@ class App:
             if npw:
                 self.naver_pw_var.set(npw)
             # 포스팅 주기 / 줄바꿈 설정 복원
-            self.cafe_interval_var.set(data.get("posting_interval", 60))
-            self.cafe_post_count_var.set(data.get("post_count", 10))
+            if "posting_interval_min" in data or "posting_interval_max" in data:
+                self.cafe_interval_min_var.set(data.get("posting_interval_min", 5))
+                self.cafe_interval_max_var.set(data.get("posting_interval_max", 30))
+            else:
+                old = data.get("posting_interval", 60)
+                self.cafe_interval_min_var.set(max(1, old // 2))
+                self.cafe_interval_max_var.set(old)
+            self.cafe_post_count_var.set(max(2, data.get("post_count", 10)))
             lb = data.get("linebreak_enabled", False)
             self.cafe_linebreak_var.set(lb)
             self.cafe_maxchars_var.set(data.get("linebreak_max_chars", 45))
@@ -2148,6 +3083,8 @@ class App:
             self._auto_restart_enabled = data.get("auto_restart_enabled", False)
             self._auto_restart_hour = data.get("auto_restart_hour", 9)
             self._auto_restart_minute = data.get("auto_restart_minute", 0)
+            self._auto_restart_blog = data.get("auto_restart_blog", False)
+            self._auto_restart_cafe = data.get("auto_restart_cafe", True)
             if self._auto_restart_enabled:
                 self._schedule_auto_restart()
             # 도우미 카페 모드 복원 (구 helper_cafe_use 호환)
@@ -2157,6 +3094,12 @@ class App:
                     hm = "all"
                 if hm in ("all", "") or hm is None:
                     self.helper_cafe_mode_var.set(hm or "")
+            # 다중아이디 설정 복원
+            if hasattr(self, "cafe_multi_account_var"):
+                self.cafe_multi_account_var.set(bool(data.get("cafe_multi_account", False)))
+                self.cafe_multi_account_file_var.set(data.get("cafe_multi_account_file", ""))
+                self.cafe_account_switch_wait_var.set(int(data.get("cafe_account_switch_wait", 5)))
+                self.cafe_infinite_loop_var.set(bool(data.get("cafe_infinite_loop", False)))
             saved = data.get("cafe_list", [])
             if saved:
                 self.cafe_list = saved
@@ -2183,7 +3126,8 @@ class App:
     def _require_login_and_session(self, run_type="search"):
         """로그인 체크 + 기기 제한 체크 + 세션 등록. 성공 시 True"""
         if not getattr(self, "_auth_available", False):
-            return True  # auth 미사용 시 통과
+            messagebox.showwarning("안내", "로그인이 필요합니다.\n(인증 모듈을 불러올 수 없습니다. Supabase 설정을 확인하세요.)")
+            return False
         try:
             from auth import is_logged_in, get_session, check_device_limit, add_active_session, save_coupang_keys
             if not is_logged_in():
@@ -2221,7 +3165,8 @@ class App:
             return True
         except Exception as e:
             self._log(f"[인증] 오류: {e}")
-            return True
+            messagebox.showwarning("안내", "로그인 확인 중 오류가 발생했습니다. 다시 시도해주세요.")
+            return False
 
     def _on_run_selected(self):
         if not self._require_login_and_session():
@@ -2265,6 +3210,8 @@ class App:
                          daemon=True).start()
 
     def _worker(self, keywords, gemini_key):
+        keywords = list(keywords)
+        random.shuffle(keywords)
         total = len(keywords)
         limit = 1
         img_dir = self.img_dir_var.get().strip()
@@ -2331,40 +3278,76 @@ class App:
     # ──────────────────────────────────────────────
     # CAFE POSTING
     # ──────────────────────────────────────────────
-    def _on_start_posting(self, skip_confirm=False):
-        """skip_confirm: 자동재시작 등에서 확인 팝업 없이 바로 시작"""
+    def _on_start_posting(self, skip_confirm=False, cafes_override=None, use_agent_cafe_loop=False):
+        """skip_confirm: 자동재시작 등에서 확인 팝업 없이 바로 시작.
+        cafes_override: 에이전트 모드에서 agent_cafe_lists로 가져온 카페 리스트 (서버뉴카페 체크 시).
+        use_agent_cafe_loop: True면 모두 완료 후 처음 카페부터 반복."""
         if not self._require_login_and_session("cafe"):
             return
-        nid = self.naver_id_var.get().strip()
-        npw = self.naver_pw_var.get().strip()
+        use_paid_kw = getattr(self, "use_paid_member_keywords_var", None) and self.use_paid_member_keywords_var.get()
+        if use_paid_kw and self._is_admin():
+            try:
+                from supabase_client import fetch_paid_member_keywords_pool
+                pc = max(2, self.cafe_post_count_var.get())
+                keywords_for_posting = fetch_paid_member_keywords_pool(count=pc * 2, log=self._cafe_log)
+                if not keywords_for_posting:
+                    messagebox.showwarning("안내", "유료회원 키워드가 없습니다. Supabase paid_members 테이블을 확인하세요.")
+                    return
+            except Exception as e:
+                messagebox.showerror("오류", f"유료회원 키워드 조회 실패:\n{e}")
+                return
+        else:
+            if not self.keywords:
+                messagebox.showwarning("안내",
+                    "키워드를 먼저 '상품 검색' 탭에서 불러오세요.")
+                return
+            keywords_for_posting = None
+        multi = getattr(self, "cafe_multi_account_var", None) and self.cafe_multi_account_var.get()
+        if multi:
+            path = getattr(self, "cafe_multi_account_file_var", None) and self.cafe_multi_account_file_var.get().strip()
+            if not path or not os.path.isfile(path):
+                messagebox.showwarning("안내", "다중아이디 사용 시 아이디 파일을 불러오세요.")
+                return
+            accounts = self._load_accounts_from_file(path)
+            if not accounts:
+                messagebox.showwarning("안내", "유효한 계정이 없습니다. 형식: 아이디[TAB]비밀번호 (한 줄에 하나)")
+                return
+        else:
+            nid = self.naver_id_var.get().strip()
+            npw = self.naver_pw_var.get().strip()
+            if not nid or not npw:
+                messagebox.showwarning("안내", "네이버 아이디와 비밀번호를 입력하세요.")
+                return
+            accounts = [{"id": nid, "pw": npw}]
         gk = self.gemini_key_var.get().strip()
-        if not nid or not npw:
-            messagebox.showwarning("안내", "네이버 아이디와 비밀번호를 입력하세요.")
-            return
         if not gk:
             messagebox.showwarning("안내",
                 "Gemini API Key를 먼저 '상품 검색' 탭에서 입력하세요.")
             return
-        mode = self.helper_cafe_mode_var.get()
-        if mode == "all":
-            cafes_for_posting = [{"cafe_id": c["cafe_id"], "menu_id": c["menu_id"]} for c in getattr(self, "helper_cafes", [])]
+        if cafes_override is not None:
+            cafes_for_posting = cafes_override
         else:
-            cafes_for_posting = self.cafe_list
+            mode = self.helper_cafe_mode_var.get()
+            if mode == "all":
+                cafes_for_posting = [{"cafe_id": c["cafe_id"], "menu_id": c["menu_id"]} for c in getattr(self, "helper_cafes", [])]
+            else:
+                cafes_for_posting = self.cafe_list
         if not cafes_for_posting:
-            msg = "카페리스트를 먼저 불러오세요." if mode != "all" else "서버 도우미 카페리스트가 비어있습니다. '적용' 버튼을 눌러주세요."
+            if cafes_override is not None:
+                msg = "서버에 가입된 카페(agent_cafe_lists)가 없습니다. 카페가입을 먼저 진행해주세요."
+            else:
+                mode = self.helper_cafe_mode_var.get()
+                msg = "카페리스트를 먼저 불러오세요." if mode != "all" else "서버 도우미 카페리스트가 비어있습니다. '적용' 버튼을 눌러주세요."
             messagebox.showwarning("안내", msg)
-            return
-        if not self.keywords:
-            messagebox.showwarning("안내",
-                "키워드를 먼저 '상품 검색' 탭에서 불러오세요.")
             return
         if self.is_posting:
             messagebox.showinfo("안내", "이미 포스팅이 진행 중입니다.")
             return
+        kw_count = len(keywords_for_posting) if keywords_for_posting else len(self.keywords or [])
         if not skip_confirm:
             msg = (f"아래 설정으로 자동 포스팅을 시작합니다.\n\n"
                    f"  발행 카테고리: {self.selected_category.get()}\n"
-                   f"  키워드: {len(self.keywords)}개\n"
+                   f"  키워드: {kw_count}개\n"
                    f"  카페: {len(cafes_for_posting)}개\n"
                    f"  총 포스팅: 카페당 키워드 1씩 배분 (작업 수 건)\n\n"
                    f"계속 진행할까요?")
@@ -2376,7 +3359,15 @@ class App:
         self._clear_cafe_log()
         self._update_cafe_progress(0, "준비 중...")
         self._save_cafe_settings()
-        threading.Thread(target=self._posting_worker, args=(cafes_for_posting,), daemon=True).start()
+        self.append_log_global("[AGENT] starting thread -> _posting_worker()")
+        t = threading.Thread(
+            target=self._posting_worker,
+            args=(cafes_for_posting, accounts),
+            kwargs={"keywords_override": keywords_for_posting, "use_agent_cafe_loop": use_agent_cafe_loop},
+            daemon=True,
+        )
+        t.start()
+        self.append_log_global("[AGENT] cafe worker thread started")
 
     def _on_stop_posting(self):
         if self.is_posting:
@@ -2391,16 +3382,24 @@ class App:
                 self._driver_holder["driver"] = None
                 self._cafe_log("[중지] ✔ 크롬 브라우저 강제 종료 완료")
 
-    def _posting_worker(self, cafes_for_posting=None, task_id=None):
+    def _posting_worker(self, cafes_for_posting=None, accounts=None, task_id=None, keywords_override=None, use_agent_cafe_loop=False):
+        """accounts: [{"id", "pw"}, ...] — 다중아이디 시 여러 계정. keywords_override: 유료회원 키워드 사용 시.
+        use_agent_cafe_loop: True면 서버뉴카페 모드 — 모두 완료 후 처음 카페부터 반복."""
+        self.append_log_global("[CAFE] worker started")
+        self._cafe_log("[CAFE] worker started")
+        import time
         from cafe_poster import run_auto_posting
-        nid = self.naver_id_var.get().strip()
-        npw = self.naver_pw_var.get().strip()
+        accounts = accounts or [{"id": self.naver_id_var.get().strip(), "pw": self.naver_pw_var.get().strip()}]
+        keywords_to_use = (keywords_override if keywords_override is not None else self.keywords) or []
         gk = self.gemini_key_var.get().strip()
         sl = 1
         imd = self.img_dir_var.get().strip()
         posted = [0]
         self._driver_holder = {"driver": None}
         cafes = cafes_for_posting if cafes_for_posting is not None else self.cafe_list
+        multi = getattr(self, "cafe_multi_account_var", None) and self.cafe_multi_account_var.get()
+        infinite = getattr(self, "cafe_infinite_loop_var", None) and self.cafe_infinite_loop_var.get()
+        wait_min = max(1, getattr(self, "cafe_account_switch_wait_var", None) and self.cafe_account_switch_wait_var.get() or 5)
 
         # ── Supabase에서 유료회원 목록 가져오기 ──
         paid_members = []
@@ -2415,29 +3414,39 @@ class App:
 
         # ── 추천인(referrer_id) 조회 (세션에 있으면) ──
         referrer = None
+        program_username = ""
+        coupang_ak, coupang_sk = None, None
         try:
             from auth import get_session
-            from supabase_client import fetch_referrer
+            from supabase_client import fetch_referrer, fetch_user_coupang_keys
             s = get_session()
+            program_username = (s or {}).get("username", "") or ""
             rid = (s or {}).get("referrer_id") if s else None
             if rid:
                 self._cafe_log(f"[Supabase] 추천인 '{rid}' 조회 중...")
                 referrer = fetch_referrer(rid, log=self._cafe_log)
+            # 본인글용 쿠팡 API 키: users 테이블 우선 (SaaS에서 설정)
+            keys = fetch_user_coupang_keys(program_username, log=self._cafe_log)
+            if keys:
+                coupang_ak, coupang_sk = keys[0], keys[1]
         except Exception as e:
             self._cafe_log(f"[Supabase] 추천인 조회 실패: {e}")
+        if not coupang_ak or not coupang_sk:
+            coupang_ak = self.coupang_ak_var.get().strip() or None
+            coupang_sk = self.coupang_sk_var.get().strip() or None
 
         # 교차 발행 시 total 재계산
         if paid_members:
-            kw = max(len(self.keywords), 1)
+            kw = max(len(keywords_to_use), 1)
             if referrer:
                 cycles = (kw + 2) // 3
                 task_count = cycles * 6
             else:
                 task_count = kw * 2
         else:
-            task_count = len(self.keywords)
-        # post_count로 발행 개수 제한 적용
-        pc = self.cafe_post_count_var.get()
+            task_count = len(keywords_to_use)
+        # post_count로 발행 개수 제한 적용 (최소 2: 본인글 포함)
+        pc = max(2, self.cafe_post_count_var.get())
         if pc and pc > 0 and task_count > pc:
             task_count = pc
         total = task_count  # 카페당 키워드 1씩 → 총 포스팅 = 작업 수
@@ -2450,33 +3459,71 @@ class App:
                 self._safe(self._update_cafe_progress, pct,
                            f"{posted[0]}/{total}건 완료")
 
+        account_idx = 0
+        result = {"success": 0, "fail": 0}
         try:
-            result = run_auto_posting(
-                login_id=nid, password=npw, cafes=cafes,
-                keywords=self.keywords, gemini_api_key=gk,
-                search_limit=sl, image_save_dir=imd, log=log_prog,
-                stop_flag=lambda: getattr(self, '_posting_stop_flag', False),
-                driver_holder=self._driver_holder,
-                keyword_repeat_min=self.cafe_kw_repeat_min_var.get(),
-                keyword_repeat_max=self.cafe_kw_repeat_max_var.get(),
-                posting_interval=self.cafe_interval_var.get(),
-                linebreak_enabled=self.cafe_linebreak_var.get(),
-                linebreak_max_chars=self.cafe_maxchars_var.get(),
-                link_btn_image=None,  # 더 이상 사용하지 않음 (댓글 방식)
-                coupang_access_key=self.coupang_ak_var.get().strip() or None,
-                coupang_secret_key=self.coupang_sk_var.get().strip() or None,
-                paid_members=paid_members or None,
-                referrer=referrer,
-                post_count=self.cafe_post_count_var.get(),
-                use_product_name=self.cafe_use_product_name_var.get(),
-                category=self.selected_category.get(),
-                commission_image_folder=self.commission_image_folder_var.get().strip() or None)
+            while True:
+                if getattr(self, "_posting_stop_flag", False):
+                    self._cafe_log("[중지] 사용자가 작업을 중지했습니다.")
+                    break
+                acc = accounts[account_idx]
+                nid, npw = acc["id"], acc["pw"]
+                if multi and len(accounts) > 1:
+                    self._cafe_log(f"\n[다중아이디] {account_idx + 1}/{len(accounts)}번째 계정: {nid}")
+                result = run_auto_posting(
+                    login_id=nid, password=npw, cafes=cafes,
+                    keywords=keywords_to_use, gemini_api_key=gk,
+                    search_limit=sl, image_save_dir=imd, log=log_prog,
+                    stop_flag=lambda: getattr(self, '_posting_stop_flag', False),
+                    driver_holder=self._driver_holder,
+                    keyword_repeat_min=self.cafe_kw_repeat_min_var.get(),
+                    keyword_repeat_max=self.cafe_kw_repeat_max_var.get(),
+                    posting_interval_min=max(1, self.cafe_interval_min_var.get()),
+                    posting_interval_max=max(1, self.cafe_interval_max_var.get()),
+                    linebreak_enabled=self.cafe_linebreak_var.get(),
+                    linebreak_max_chars=self.cafe_maxchars_var.get(),
+                    link_btn_image=None,  # 더 이상 사용하지 않음 (댓글 방식)
+                    coupang_access_key=coupang_ak,
+                    coupang_secret_key=coupang_sk,
+                    paid_members=paid_members or None,
+                    referrer=referrer,
+                    post_count=max(2, self.cafe_post_count_var.get()),
+                    use_product_name=self.cafe_use_product_name_var.get(),
+                    category=self.selected_category.get(),
+                    commission_image_folder=self.commission_image_folder_var.get().strip() or None,
+                    program_username=program_username)
 
-            sc = result.get("success", 0)
-            fl = result.get("fail", 0)
-            self._safe(self._update_cafe_progress, 100,
-                       f"완료 — 성공: {sc} / 실패: {fl}")
-            self._safe(self._set_status, "done", f"포스팅 완료: {sc}/{total}")
+                sc = result.get("success", 0)
+                fl = result.get("fail", 0)
+                self._safe(self._update_cafe_progress, 100,
+                           f"완료 — 성공: {sc} / 실패: {fl}")
+
+                if getattr(self, "_posting_stop_flag", False):
+                    break
+                # 서버뉴카페 모드: 모두 완료 후 처음 카페부터 반복
+                if use_agent_cafe_loop:
+                    self._cafe_log("\n[서버뉴카페] 처음 카페부터 재시작...")
+                    wait_sec = min(wait_min * 60, 3600)
+                    for _ in range(wait_sec):
+                        if getattr(self, "_posting_stop_flag", False):
+                            break
+                        time.sleep(1)
+                    continue
+                account_idx += 1
+                if account_idx >= len(accounts):
+                    if infinite:
+                        account_idx = 0
+                        self._cafe_log(f"\n[무한반복] 첫 아이디부터 재시작. {wait_min}분 대기...")
+                    else:
+                        break
+                if account_idx < len(accounts) or (infinite and account_idx == 0):
+                    self._cafe_log(f"\n[다중아이디] 다음 계정으로 전환. {wait_min}분 대기...")
+                    wait_sec = min(wait_min * 60, 3600)
+                    for _ in range(wait_sec):
+                        if getattr(self, "_posting_stop_flag", False):
+                            break
+                        time.sleep(1)
+            self._safe(self._set_status, "done", f"포스팅 완료")
         except Exception as e:
             self._cafe_log(f"[에이전트] 포스팅 실행 중 오류: {e}")
             result = {"success": 0, "fail": 0, "error": str(e)}
@@ -2511,6 +3558,9 @@ class App:
     def _on_agent_mode_toggle(self):
         """에이전트 모드 체크박스 토글"""
         if self.agent_mode_var.get():
+            if not self._require_login_and_session("cafe"):
+                self.agent_mode_var.set(False)
+                return
             self._cafe_log("[에이전트] 비서 모드 활성화 — 1분마다 tasks 테이블 확인")
             self._schedule_agent_poll()
         else:
@@ -2540,7 +3590,10 @@ class App:
             task = fetch_pending_task(log=self._cafe_log)
             if task:
                 self._cafe_log(f"[에이전트] 대기 작업 발견: keyword={task.get('keyword')}")
-                threading.Thread(target=self._agent_task_worker, args=(task,), daemon=True).start()
+                self.append_log_global("[AGENT] starting thread -> _agent_task_worker()")
+                t = threading.Thread(target=self._agent_task_worker, args=(task,), daemon=True)
+                t.start()
+                self.append_log_global(f"[AGENT] task thread started, is_alive={t.is_alive()}")
                 return
         except Exception as e:
             self._cafe_log(f"[에이전트] 폴링 오류: {e}")
@@ -2548,6 +3601,7 @@ class App:
 
     def _agent_task_worker(self, task):
         """에이전트 모드: 단일 작업 실행 (run_pipeline + 포스팅)"""
+        self.append_log_global("[AGENT] _agent_task_worker started")
         task_id = task.get("id")
         keyword = (task.get("keyword") or "").strip()
         if not keyword:
@@ -2579,6 +3633,429 @@ class App:
         self.root.after(0, self._schedule_agent_poll)
 
     # ──────────────────────────────────────────────
+    # 에이전트모드 실행 (agent_commands + agent_configs)
+    # ──────────────────────────────────────────────
+    def _on_agent_exec_toggle(self):
+        if self._agent_exec_var.get():
+            try:
+                from auth import get_session
+                s = get_session()
+                if not s or not s.get("username"):
+                    self._agent_exec_var.set(False)
+                    messagebox.showwarning("안내", "에이전트 모드를 사용하려면 먼저 로그인하세요.")
+                    return
+            except Exception:
+                self._agent_exec_var.set(False)
+                return
+            self._cafe_log("[에이전트] 실행 모드 활성화 — agent_commands 45초마다 확인")
+            self._schedule_agent_cmd_poll()
+            self._schedule_agent_heartbeat()
+        else:
+            if self._agent_cmd_poll_timer_id:
+                self.root.after_cancel(self._agent_cmd_poll_timer_id)
+                self._agent_cmd_poll_timer_id = None
+            if self._agent_heartbeat_timer_id:
+                self.root.after_cancel(self._agent_heartbeat_timer_id)
+                self._agent_heartbeat_timer_id = None
+            self._cafe_log("[에이전트] 실행 모드 비활성화")
+
+    def _schedule_agent_cmd_poll(self):
+        if not self._agent_exec_var.get():
+            return
+        if self._agent_cmd_poll_timer_id:
+            return
+        self._agent_cmd_poll_timer_id = self.root.after(45_000, self._agent_cmd_poll)
+
+    def _schedule_agent_heartbeat(self):
+        if not self._agent_exec_var.get():
+            return
+        if self._agent_heartbeat_timer_id:
+            return
+        self._agent_heartbeat_timer_id = self.root.after(150_000, self._agent_heartbeat_tick)
+
+    def _agent_heartbeat_tick(self):
+        self._agent_heartbeat_timer_id = None
+        if not self._agent_exec_var.get():
+            return
+        try:
+            from auth import get_session
+            from supabase_client import agent_heartbeat
+            s = get_session()
+            if s and s.get("username"):
+                agent_heartbeat(s["username"], log=self._cafe_log)
+        except Exception:
+            pass
+        self._schedule_agent_heartbeat()
+
+    def _check_cafe_join_schedule(self, program_username):
+        """가입시작시간 도래 시 자동 카페가입 (해당 날짜 해당 시간에 프로그램 켜져 있으면).
+        해당 프로그램 아이디의 agent_config.cafe_join 정책 사용."""
+        try:
+            from auth import get_session
+            from supabase_client import fetch_cafe_join_policy_for_program
+            from cafe_autojoin import _resolve_run_days
+            s = get_session()
+            owner_id = (s or {}).get("id") if s else None
+            policy = fetch_cafe_join_policy_for_program(program_username, owner_user_id=owner_id, log=self._cafe_log)
+            run_days_raw = policy.get("run_days") or [4, 14, 24]
+            start_time_str = (policy.get("start_time") or "09:00").strip() or "09:00"
+            now = datetime.datetime.now()
+            today = now.day
+            year, month = now.year, now.month
+            run_days = _resolve_run_days(run_days_raw, year, month)
+            if today not in run_days:
+                return  # 오늘은 실행일 아님
+            try:
+                parts = start_time_str.split(":")
+                h = int(parts[0]) if parts else 9
+                m = int(parts[1]) if len(parts) > 1 else 0
+            except Exception:
+                h, m = 9, 0
+            if now.hour < h or (now.hour == h and now.minute < m):
+                return  # 가입시작시간 아직 안 됨
+            last_run_file = os.path.join(BASE_DIR, ".cafe_join_last_run.json")
+            try:
+                if os.path.exists(last_run_file):
+                    with open(last_run_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if data.get("date") == now.strftime("%Y-%m-%d"):
+                        return  # 오늘 이미 실행됨 (재시도 시 .cafe_join_last_run.json 삭제)
+            except Exception:
+                pass
+            self._cafe_log(f"[에이전트] 가입시작시간 도래 ({start_time_str}) — 자동 카페가입 시작")
+            self.root.after(0, lambda: self._run_cafe_join_job_async(cmd_id=None, program_username=program_username, payload={}))
+        except Exception as e:
+            self._cafe_log(f"[에이전트] 카페가입 스케줄 확인 오류: {e}")
+
+    def _agent_cmd_poll(self):
+        self._agent_cmd_poll_timer_id = None
+        if not self._agent_exec_var.get():
+            return
+        try:
+            from auth import get_session
+            from supabase_client import fetch_pending_stop_commands, fetch_pending_agent_commands, mark_agent_command_done, insert_agent_run
+            s = get_session()
+            if not s or not s.get("username"):
+                self._schedule_agent_cmd_poll()
+                return
+            un = s["username"]
+
+            # (A) stop 우선 체크 — 있으면 즉시 처리 후 다음 루프로
+            stop_rows = fetch_pending_stop_commands(un, log=self._cafe_log)
+            if stop_rows:
+                self._stop_flag = True
+                self._blog_stop_flag = True
+                self._posting_stop_flag = True
+                self.append_log_global("[AGENT] STOP received -> stop_flag set")
+                insert_agent_run(un, "stopped", log=self._log)
+                for r in stop_rows:
+                    mark_agent_command_done(r.get("id"), log=self._log)
+                self._schedule_agent_cmd_poll()
+                return
+
+            # (B) 그 외 명령 FIFO 처리 (created_at ASC, limit 20, stop 제외)
+            rows = fetch_pending_agent_commands(un, limit=20, exclude_stop=True, log=self._cafe_log)
+            if rows:
+                is_busy = self.is_blog_posting or self.is_posting or self.is_running
+                if is_busy:
+                    self._cafe_log(f"[에이전트] 명령 {len(rows)}건 수신 — 작업 중, stop만 처리 (stop 없음)")
+                else:
+                    self._cafe_log(f"[에이전트] 명령 {len(rows)}건 수신 — FIFO 순서대로 처리")
+                threading.Thread(target=self._agent_cmd_worker, args=(un, rows, is_busy), daemon=True).start()
+                return
+
+            # (C) 명령 없을 때: 가입시작시간 도래 시 자동 카페가입
+            if not getattr(self, "is_blog_posting", False) and not getattr(self, "is_posting", False) and not getattr(self, "is_running", False):
+                self._check_cafe_join_schedule(un)
+        except Exception as e:
+            self._cafe_log(f"[에이전트] 폴링 오류: {e}")
+        self._schedule_agent_cmd_poll()
+
+    def _agent_cmd_worker(self, program_username, rows, is_busy=False):
+        """에이전트 명령 처리. is_busy=True면 stop만 즉시 처리, 나머지는 대기."""
+        import traceback
+        from supabase_client import mark_agent_command_done, insert_agent_run
+        i = 0
+        try:
+            while i < len(rows):
+                row = rows[i]
+                cmd_id = row.get("id")
+                cmd = row.get("command") or ""
+                payload = row.get("payload") or {}
+
+                # 작업 중일 때: stop만 처리 (A에서 이미 처리했으나 혹시 모를 fallback)
+                if is_busy:
+                    if cmd == "stop":
+                        self._stop_flag = True
+                        self._blog_stop_flag = True
+                        self._posting_stop_flag = True
+                        insert_agent_run(program_username, "stopped", log=self._log)
+                        self.append_log_global("[AGENT] STOP received -> stop_flag set")
+                        mark_agent_command_done(cmd_id, log=self._log)
+                    i += 1
+                    continue
+
+                if cmd == "apply_config":
+                    # 연속 apply_config 수집 — 마지막 1개만 실제 적용, 나머지는 done만
+                    batch = [row]
+                    j = i + 1
+                    while j < len(rows) and (rows[j].get("command") or "") == "apply_config":
+                        batch.append(rows[j])
+                        j += 1
+                    self.append_log_global("[AGENT] apply_config received -> loading agent_configs")
+                    def _apply_and_log():
+                        self._agent_apply_config()
+                        self.append_log_global("[AGENT] apply_config applied")
+                    self.root.after(0, _apply_and_log)
+                    for r in batch:
+                        mark_agent_command_done(r.get("id"), log=self._log)
+                    i = j
+                    continue
+
+                if cmd == "start":
+                    self._stop_flag = False
+                    self.is_running = True
+                    insert_agent_run(program_username, "started", log=self._log)
+                    raw_mode = (payload or {}).get("mode", "blog")
+                    if raw_mode is None:
+                        mode = "blog"
+                    elif raw_mode in (0, "0"):
+                        mode = "blog"
+                    elif raw_mode in (1, "1"):
+                        mode = "cafe"
+                    elif raw_mode in ("blog", "cafe", "cafe_join"):
+                        mode = raw_mode
+                    else:
+                        mode = "blog"
+                    self.append_log_global(f"[AGENT] start received mode={mode}")
+                    self._log(f"[에이전트] start 명령 처리 (mode: {raw_mode!r}->{mode})")
+                    pl = payload or {}
+                    self.root.after(0, lambda m=mode, cid=cmd_id, un=program_username, p=pl: self._agent_apply_config_then_start(m, cid, un, p))
+                elif cmd == "stop":
+                    self._stop_flag = True
+                    self._blog_stop_flag = True
+                    self._posting_stop_flag = True
+                    insert_agent_run(program_username, "stopped", log=self._log)
+                    self.append_log_global("[AGENT] STOP received -> stop_flag set")
+                    mark_agent_command_done(cmd_id, log=self._log)
+                elif cmd == "restart":
+                    self._stop_flag = True
+                    self.root.after(0, self._agent_restart_loop)
+                    mark_agent_command_done(cmd_id, log=self._log)
+                else:
+                    self.append_log_global(f"[AGENT] unknown command: {cmd!r}")
+                    self._log(f"[에이전트] 알 수 없는 명령: {cmd}")
+                    from supabase_client import mark_agent_command_error
+                    mark_agent_command_error(cmd_id, f"unknown command: {cmd!r}", log=self._log)
+                i += 1
+        except Exception as e:
+            self._log(f"[에이전트] 명령 처리 오류: {e}")
+            traceback.print_exc()
+            self.is_running = False
+            try:
+                insert_agent_run(program_username, "error", message=str(e), log=self._log)
+            except Exception:
+                pass
+            try:
+                if i < len(rows):
+                    mark_agent_command_done(rows[i].get("id"), error_message=str(e), log=self._log)
+            except Exception:
+                pass
+        self.root.after(0, self._schedule_agent_cmd_poll)
+
+    def _agent_apply_config(self):
+        """agent_configs에서 설정 읽어서 GUI에 적용"""
+        try:
+            from auth import get_session
+            from supabase_client import fetch_agent_config
+            s = get_session()
+            if not s or not s.get("username"):
+                return
+            row = fetch_agent_config(s["username"], owner_user_id=s.get("id"), log=self._log)
+            cfg = row.get("config") or {}
+            blog = cfg.get("blog") or {}
+            if blog and hasattr(self, "blog_naver_id_var"):
+                self.blog_naver_id_var.set(blog.get("naver_id", ""))
+                self.blog_naver_pw_var.set(blog.get("naver_pw", ""))
+                self.blog_post_count_var.set(int(blog.get("publish_count", 10)))
+                self.blog_interval_min_var.set(int(blog.get("delay_min", 2)))
+                self.blog_interval_max_var.set(int(blog.get("delay_max", 5)))
+                ar = blog.get("auto_restart") or {}
+                if isinstance(ar, dict):
+                    self._auto_restart_enabled = bool(ar.get("enabled", False))
+                    self._auto_restart_blog = self._auto_restart_enabled
+                self.blog_auto_start_cafe_var.set(bool(blog.get("auto_start_cafe_after_blog", False)))
+            # 카페 설정 적용
+            cafe = cfg.get("cafe") or {}
+            if cafe and hasattr(self, "naver_id_var"):
+                self.naver_id_var.set(cafe.get("naver_id", ""))
+                self.naver_pw_var.set(cafe.get("naver_pw", ""))
+                self.cafe_post_count_var.set(max(2, int(cafe.get("publish_count", 10))))
+                self.cafe_interval_min_var.set(max(1, int(cafe.get("delay_min", 5))))
+                self.cafe_interval_max_var.set(max(1, int(cafe.get("delay_max", 30))))
+                ar = cafe.get("auto_restart") or {}
+                if isinstance(ar, dict) and ar.get("enabled"):
+                    self._auto_restart_enabled = True
+                    self._auto_restart_cafe = True
+                self._agent_use_new_cafe_list = bool(cafe.get("use_new_cafe_list", False))
+                self._log("[에이전트] 카페 설정 적용 완료")
+            else:
+                self._agent_use_new_cafe_list = getattr(self, "_agent_use_new_cafe_list", False)
+            self._log("[에이전트] 설정 적용 완료")
+        except Exception as e:
+            self._log(f"[에이전트] 설정 적용 오류: {e}")
+
+    def _agent_apply_config_then_start(self, mode, cmd_id=None, program_username=None, payload=None):
+        """설정 적용 후 작업 시작. mode: 'blog' | 'cafe' | 'cafe_join'. payload.immediate=True면 카페가입 즉시 실행"""
+        import traceback
+        try:
+            self._agent_apply_config()
+            if mode == "blog":
+                self._switch_tab_main("blog")
+                self._on_start_blog_posting(skip_confirm=True, cmd_id=cmd_id, program_username=program_username)
+                if cmd_id is not None:
+                    from supabase_client import mark_agent_command_done
+                    wt = getattr(self, "worker_thread", None)
+                    if wt and wt.is_alive():
+                        mark_agent_command_done(cmd_id, log=self._log)
+                    else:
+                        self.is_running = False
+                        err = getattr(self, "_last_start_error", None) or "worker thread not started"
+                        mark_agent_command_done(cmd_id, error_message=err, log=self._log)
+            elif mode == "cafe":
+                self._switch_tab_main("cafe")
+                cafes_override = None
+                use_loop = getattr(self, "_agent_use_new_cafe_list", False)
+                if use_loop:
+                    from auth import get_session
+                    from supabase_client import fetch_agent_cafe_lists
+                    s = get_session()
+                    # 로그인 아이디와 동일한 프로그램 유저네임 것만 사용 (다른 계정 것 사용 안 함)
+                    un = ((s or {}).get("username", "") or "").strip()
+                    if un:
+                        raw = fetch_agent_cafe_lists(un, statuses=["joined"], log=self._log)
+                        cafes_override = [{"cafe_id": c["cafe_id"], "menu_id": c["menu_id"]} for c in raw if (c.get("cafe_id") or "").strip() and (c.get("menu_id") or "").strip()]
+                        if cafes_override:
+                            self._log(f"[에이전트] 서버뉴카페 {len(cafes_override)}개로 포스팅 (완료 시 처음부터 반복)")
+                self._on_start_posting(skip_confirm=True, cafes_override=cafes_override, use_agent_cafe_loop=use_loop and bool(cafes_override))
+                if cmd_id is not None:
+                    from supabase_client import mark_agent_command_done
+                    mark_agent_command_done(cmd_id, log=self._log)
+            elif mode == "cafe_join":
+                self._run_cafe_join_job_async(cmd_id=cmd_id, program_username=program_username, payload=payload or {})
+            else:
+                if cmd_id is not None:
+                    from supabase_client import mark_agent_command_done
+                    mark_agent_command_done(cmd_id, log=self._log)
+        except Exception as e:
+            traceback.print_exc()
+            self.is_running = False
+            if cmd_id is not None:
+                try:
+                    from supabase_client import mark_agent_command_done, insert_agent_run
+                    if program_username:
+                        insert_agent_run(program_username, "error", message=str(e), log=self._log)
+                    mark_agent_command_done(cmd_id, error_message=str(e), log=self._log)
+                except Exception:
+                    pass
+
+    def _run_cafe_join_job_async(self, cmd_id=None, program_username=None, payload=None):
+        """카페가입 에이전트 작업을 스레드로 실행. payload.immediate=True면 날짜 체크 없이 즉시 실행"""
+        self._switch_tab_main("cafe")
+        from auth import get_session
+        from supabase_client import fetch_agent_config, fetch_app_links, mark_agent_command_done, insert_agent_run
+        from cafe_autojoin import run_cafe_join_job
+
+        s = get_session()
+        if not s or not s.get("username"):
+            self._cafe_log("[카페가입 에이전트] 로그인 필요")
+            if cmd_id:
+                mark_agent_command_done(cmd_id, error_message="로그인 필요", log=self._log)
+            return
+
+        owner_id = s.get("id")
+        un = program_username or s.get("username")
+        cfg = fetch_agent_config(un, owner_id, log=self._log)
+        blog_cfg = (cfg.get("config") or {}).get("blog") or {}
+        nid = (blog_cfg.get("naver_id") or "").strip()
+        npw = (blog_cfg.get("naver_pw") or "").strip()
+        # 다중아이디: naver_accounts 또는 naver_id_2/naver_pw_2
+        accounts = None
+        nav_acc = blog_cfg.get("naver_accounts")
+        if isinstance(nav_acc, list) and len(nav_acc) > 0:
+            accounts = [{"id": (a.get("id") or a.get("naver_id") or "").strip(), "pw": (a.get("pw") or a.get("naver_pw") or "").strip()} for a in nav_acc if (a.get("id") or a.get("naver_id") or "").strip() and (a.get("pw") or a.get("naver_pw") or "").strip()]
+        nid2 = (blog_cfg.get("naver_id_2") or "").strip()
+        npw2 = (blog_cfg.get("naver_pw_2") or "").strip()
+        if not accounts and nid2 and npw2:
+            accounts = [{"id": nid, "pw": npw}, {"id": nid2, "pw": npw2}]
+        if not nid or not npw:
+            if not (accounts and len(accounts) > 0):
+                self._cafe_log("[카페가입 에이전트] agent_config에 네이버 아이디/비밀번호 없음")
+                if cmd_id:
+                    mark_agent_command_done(cmd_id, error_message="네이버 계정 설정 필요", log=self._log)
+                return
+
+        links = fetch_app_links(log=self._log)
+        captcha = (links.get("captcha_api_key") or "").strip() or getattr(self, "_cafe_autojoin_captcha_key", "") or ""
+
+        # 명령 즉시 완료 처리 → 다음 폴에서 동일 명령 재수신·중복 실행 방지
+        if cmd_id:
+            mark_agent_command_done(cmd_id, log=self._log)
+
+        def _log(msg):
+            try:
+                self.root.after(0, lambda m=msg: self._cafe_log(m))
+            except Exception:
+                pass
+
+        def _progress(p, t):
+            try:
+                self.root.after(0, lambda pp=p, tt=t: self._update_cafe_progress(pp, tt))
+            except Exception:
+                pass
+
+        def _run():
+            try:
+                self.is_running = True
+                immediate = bool((payload or {}).get("immediate", False))
+                ok = run_cafe_join_job(
+                    owner_user_id=owner_id,
+                    program_username=un,
+                    naver_id=nid,
+                    naver_pw=npw,
+                    captcha_api_key=captcha or None,
+                    stop_flag=lambda: getattr(self, "_stop_flag", False),
+                    log=_log,
+                    on_progress=_progress,
+                    immediate=immediate,
+                    accounts=accounts,
+                )
+                if ok:
+                    try:
+                        last_run_file = os.path.join(BASE_DIR, ".cafe_join_last_run.json")
+                        with open(last_run_file, "w", encoding="utf-8") as f:
+                            json.dump({"date": datetime.datetime.now().strftime("%Y-%m-%d")}, f, ensure_ascii=False)
+                    except Exception:
+                        pass
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                _log(f"[카페가입 에이전트] 오류: {e}")
+                if cmd_id:
+                    mark_agent_command_done(cmd_id, error_message=str(e), log=self._log)
+                insert_agent_run(un, "error", message=str(e), log=self._log)
+            finally:
+                self.is_running = False
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _agent_restart_loop(self):
+        """작업 루프 재시작 (안전 중지 후 대기 상태로)"""
+        self._stop_flag = True
+        self._log("[에이전트] 재시작 명령 — 안전 중지 후 대기")
+        self.root.after(500, self._agent_apply_config)
+
+    # ──────────────────────────────────────────────
     # 자동 재시작 설정
     # ──────────────────────────────────────────────
     def _open_auto_restart_settings(self):
@@ -2590,7 +4067,7 @@ class App:
         dlg.grab_set()
 
         # 크기/위치
-        w, h = 400, 320
+        w, h = 400, 360
         x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
         dlg.geometry(f"{w}x{h}+{x}+{y}")
@@ -2609,12 +4086,30 @@ class App:
         # ── 활성화 토글 ──
         enable_var = tk.BooleanVar(value=self._auto_restart_enabled)
         chk_frame = tk.Frame(dlg, bg=BG_CARD)
-        chk_frame.pack(fill="x", padx=pad, pady=(0, 12))
+        chk_frame.pack(fill="x", padx=pad, pady=(0, 8))
         tk.Checkbutton(chk_frame, text="  자동 재시작 사용",
                        variable=enable_var, font=F,
                        bg=BG_CARD, fg=FG, activebackground=BG_CARD,
                        activeforeground=FG, selectcolor=BG_INPUT,
                        ).pack(side="left")
+
+        # ── 블로그/카페 선택 ──
+        type_frame = tk.Frame(dlg, bg=BG_CARD)
+        type_frame.pack(fill="x", padx=pad, pady=(0, 8))
+        tk.Label(type_frame, text="재시작 대상:", font=F,
+                 bg=BG_CARD, fg=FG_LABEL).pack(side="left")
+        blog_var = tk.BooleanVar(value=self._auto_restart_blog)
+        cafe_var = tk.BooleanVar(value=self._auto_restart_cafe)
+        tk.Checkbutton(type_frame, text="  블로그",
+                       variable=blog_var, font=F_SM,
+                       bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+                       activeforeground=FG, selectcolor=BG_INPUT,
+                       ).pack(side="left", padx=(12, 0))
+        tk.Checkbutton(type_frame, text="  카페",
+                       variable=cafe_var, font=F_SM,
+                       bg=BG_CARD, fg=FG, activebackground=BG_CARD,
+                       activeforeground=FG, selectcolor=BG_INPUT,
+                       ).pack(side="left", padx=(8, 0))
 
         # ── 시간 설정 ──
         time_frame = tk.Frame(dlg, bg=BG_CARD)
@@ -2652,7 +4147,13 @@ class App:
         # ── 현재 상태 표시 ──
         status_text = ""
         if self._auto_restart_enabled:
-            status_text = (f"현재 상태: 활성  |  "
+            targets = []
+            if self._auto_restart_blog:
+                targets.append("블로그")
+            if self._auto_restart_cafe:
+                targets.append("카페")
+            targets_str = "+".join(targets) if targets else "없음"
+            status_text = (f"현재 상태: 활성 ({targets_str})  |  "
                            f"다음 실행: {self._auto_restart_hour:02d}:"
                            f"{self._auto_restart_minute:02d}")
             if self._auto_restart_timer_id is not None:
@@ -2681,6 +4182,12 @@ class App:
             self._auto_restart_enabled = enable_var.get()
             self._auto_restart_hour = int(hour_var.get())
             self._auto_restart_minute = int(min_var.get())
+            self._auto_restart_blog = blog_var.get()
+            self._auto_restart_cafe = cafe_var.get()
+
+            if self._auto_restart_enabled and not self._auto_restart_blog and not self._auto_restart_cafe:
+                messagebox.showwarning("안내", "블로그 또는 카페 중 하나 이상을 선택해주세요.")
+                return
 
             # 기존 타이머 취소
             if self._auto_restart_timer_id is not None:
@@ -2688,12 +4195,16 @@ class App:
                 self._auto_restart_timer_id = None
 
             if self._auto_restart_enabled:
+                targets = []
+                if self._auto_restart_blog:
+                    targets.append("블로그")
+                if self._auto_restart_cafe:
+                    targets.append("카페")
                 self._cafe_log(
                     f"[자동재시작] 활성화 — 매일 "
                     f"{self._auto_restart_hour:02d}:{self._auto_restart_minute:02d} "
-                    f"에 자동 발행 시작")
-                # 현재 포스팅 중이 아니면 즉시 예약
-                if not self.is_posting:
+                    f"에 자동 발행 ({'+'.join(targets)})")
+                if not self.is_posting and not self.is_blog_posting:
                     self._schedule_auto_restart()
             else:
                 self._cafe_log("[자동재시작] 비활성화")
@@ -2713,6 +4224,24 @@ class App:
     # ──────────────────────────────────────────────
     # 회원가입 / 로그인 / 로그아웃
     # ──────────────────────────────────────────────
+    def _is_admin(self):
+        """okdog 로그인 시 관리자"""
+        try:
+            from auth import get_session
+            s = get_session()
+            return (s or {}).get("username", "").strip().lower() == "okdog"
+        except Exception:
+            return False
+
+    def _refresh_admin_ui(self):
+        """관리자(okdog) 전용 UI 표시/숨김"""
+        if hasattr(self, "use_paid_keywords_frame") and self.use_paid_keywords_frame.winfo_exists():
+            if self._is_admin():
+                self.use_paid_keywords_frame.grid()
+            else:
+                self.use_paid_keywords_frame.grid_remove()
+                self.use_paid_member_keywords_var.set(False)
+
     def _update_auth_ui(self):
         """로그인 상태에 따라 버튼/라벨 업데이트"""
         if not getattr(self, "_auth_available", False):
@@ -2733,6 +4262,7 @@ class App:
                 self._auth_btn_login.set_text(" 로그인 ")
                 self._auth_btn_login.set_command(self._open_login_dialog)
                 self._auth_status_label.config(text="")
+            self._refresh_admin_ui()
         except Exception:
             pass
 
@@ -2989,20 +4519,35 @@ class App:
         if not self._auto_restart_enabled:
             return
 
+        targets = []
+        if self._auto_restart_blog:
+            targets.append("블로그")
+        if self._auto_restart_cafe:
+            targets.append("카페")
+        if not targets:
+            self._schedule_auto_restart()
+            return
+
         self._cafe_log(
             f"\n{'=' * 55}\n"
             f"  [자동재시작] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} "
-            f"자동 발행을 시작합니다.\n"
+            f"자동 발행을 시작합니다. ({'+'.join(targets)})\n"
             f"{'=' * 55}")
 
         # 이미 포스팅 중이면 스킵
-        if self.is_posting:
+        if self.is_posting or self.is_blog_posting:
             self._cafe_log("[자동재시작] 현재 포스팅 진행 중 — 완료 후 다시 예약됩니다.")
             self._schedule_auto_restart()
             return
 
-        # 발행 시작 트리거 (확인 팝업 없이 바로 시작)
-        self._on_start_posting(skip_confirm=True)
+        # 블로그+카페 둘 다 선택: 블로그 먼저, 완료 후 카페
+        if self._auto_restart_blog and self._auto_restart_cafe:
+            self._auto_restart_pending_cafe = True
+            self._on_start_blog_posting(skip_confirm=True)
+        elif self._auto_restart_blog:
+            self._on_start_blog_posting(skip_confirm=True)
+        else:
+            self._on_start_posting(skip_confirm=True)
 
     def _cancel_auto_restart(self):
         """자동재시작 타이머 취소"""
@@ -3039,6 +4584,8 @@ class App:
     # LOGGING
     # ──────────────────────────────────────────────
     def _log(self, msg):
+        if "[AGENT]" in msg or "[BLOG]" in msg or "[CAFE]" in msg or "[에이전트]" in msg:
+            self.append_log_global(msg)
         if not getattr(self, "log_text", None):
             return
         def _do():
@@ -3056,6 +4603,8 @@ class App:
         self.log_text.config(state="disabled")
 
     def _cafe_log(self, msg):
+        if "[AGENT]" in msg or "[BLOG]" in msg or "[CAFE]" in msg or "[에이전트]" in msg:
+            self.append_log_global(msg)
         def _do():
             self.cafe_log_text.config(state="normal")
             self.cafe_log_text.insert("end", msg + "\n")

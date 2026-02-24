@@ -2,7 +2,22 @@
 .env*.local
 .auth_session.json
 
+# Python
+__pycache__
+output/
+.pyarmor/
+
 # Next.js
 .next
 out
 node_modules
+
+# PyInstaller / Cython
+build
+dist
+*.spec.bak
+auth_core*.pyd
+auth_core*.so
+auth_core.c
+*.egg-info
+.pytest_cache
