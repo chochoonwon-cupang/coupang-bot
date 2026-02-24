@@ -1031,7 +1031,7 @@ export default function Home() {
               onClick={() => setShowInfoModal(true)}
               className="rounded-lg border border-slate-600 bg-slate-800/60 px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-700 hover:text-white md:px-3 md:py-2 md:text-sm"
             >
-              안내
+              이용안내
             </button>
             {sessionLoading ? (
               <span className="text-xs text-slate-400 md:text-sm">확인 중...</span>
@@ -1066,7 +1066,7 @@ export default function Home() {
         </div>
       </header>
 
-      {/* 자동포스팅 안내 팝업 */}
+      {/* 이용안내 팝업 */}
       <AutoPostingInfoModal
         isOpen={showInfoModal}
         onClose={() => setShowInfoModal(false)}

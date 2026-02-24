@@ -24,7 +24,7 @@ export default function AutoPostingInfoModal({
       >
         <div className="flex-shrink-0 border-b border-slate-700/60 bg-slate-800/80 px-4 py-4">
           <h2 className="text-center text-lg font-bold text-white md:text-xl">
-            쿠팡파트너스 자동포스팅 안내
+            쿠팡파트너스 이용안내
           </h2>
         </div>
 
