@@ -4,7 +4,7 @@
   "blog_interval_min": 2,
   "blog_interval_max": 5,
   "blog_auto_start_cafe": false,
-  "blog_post_count": 1,
+  "blog_post_count": 2,
   "blog_use_product_name": true,
   "blog_kw_repeat_min": 3,
   "blog_kw_repeat_max": 7,

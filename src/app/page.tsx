@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import AutoPostingInfoModal from "@/components/AutoPostingInfoModal";
 
 type PostLog = {
   id: string;
@@ -50,8 +51,14 @@ function formatKST(iso: string) {
   }).format(new Date(iso));
 }
 
-const INITIAL_DISPLAY = 100;
-const LOAD_MORE_COUNT = 100;
+const POST_LOGS_PER_PAGE = 9;
+
+function isTodayKST(iso: string): boolean {
+  const d = new Date(iso);
+  const kst = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  const nowKst = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  return kst.getFullYear() === nowKst.getFullYear() && kst.getMonth() === nowKst.getMonth() && kst.getDate() === nowKst.getDate();
+}
 
 type CafeJoinPolicy = {
   run_days: number[];
@@ -386,9 +393,10 @@ export default function Home() {
   const [regError, setRegError] = useState<string | null>(null);
   const [regLoading, setRegLoading] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
+  const [showInfoModal, setShowInfoModal] = useState(false);
 
   const [postLogs, setPostLogs] = useState<PostLog[]>([]);
-  const [displayCount, setDisplayCount] = useState(INITIAL_DISPLAY);
+  const [logPage, setLogPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -566,7 +574,7 @@ export default function Home() {
       }
       const data = await res.json();
       setPostLogs(Array.isArray(data) ? data : []);
-      setDisplayCount(INITIAL_DISPLAY);
+      setLogPage(1);
       setError(null);
     } catch (e) {
       setError("포스팅 로그를 불러오지 못했습니다.");
@@ -978,13 +986,14 @@ export default function Home() {
     }
   };
 
-  const displayedLogs = postLogs.slice(0, displayCount);
-  const hasMore = displayCount < postLogs.length;
+  const todayLogs = postLogs.filter((r) => isTodayKST(r.created_at));
+  const totalPages = Math.max(1, Math.ceil(todayLogs.length / POST_LOGS_PER_PAGE));
+  const displayedLogs = todayLogs.slice((logPage - 1) * POST_LOGS_PER_PAGE, logPage * POST_LOGS_PER_PAGE);
 
   const summaryCounts = {
-    self: postLogs.filter((r) => r.post_type === "self").length,
-    paid: postLogs.filter((r) => r.post_type === "paid").length,
-    referrer: postLogs.filter((r) => r.post_type === "referrer").length,
+    self: todayLogs.filter((r) => r.post_type === "self").length,
+    paid: todayLogs.filter((r) => r.post_type === "paid").length,
+    referrer: todayLogs.filter((r) => r.post_type === "referrer").length,
   };
 
   return (
@@ -993,7 +1002,14 @@ export default function Home() {
       <header className="sticky top-0 z-50 border-b border-slate-700/60 bg-slate-900/80 backdrop-blur">
         <div className="mx-auto max-w-6xl px-4 py-3 md:px-8 md:py-4">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 shrink items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab(null);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="flex min-w-0 shrink cursor-pointer items-center gap-2 rounded-lg border-0 bg-transparent p-0 text-left transition hover:opacity-90 sm:gap-3"
+            >
               <span className="flex shrink-0 items-baseline text-base font-bold tracking-tight sm:text-lg md:text-2xl" aria-hidden>
                 <span className="text-[#E04A2A]">c</span>
                 <span className="text-[#F59E0B]">o</span>
@@ -1008,8 +1024,15 @@ export default function Home() {
                 <span className="hidden sm:inline">쿠팡파트너스 자동포스팅 시스템</span>
                 <span className="sm:hidden">자동포스팅</span>
               </h1>
-            </div>
+            </button>
             <div className="flex shrink-0 items-center gap-2 md:gap-4">
+            <button
+              type="button"
+              onClick={() => setShowInfoModal(true)}
+              className="rounded-lg border border-slate-600 bg-slate-800/60 px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-700 hover:text-white md:px-3 md:py-2 md:text-sm"
+            >
+              안내
+            </button>
             {sessionLoading ? (
               <span className="text-xs text-slate-400 md:text-sm">확인 중...</span>
             ) : user ? (
@@ -1042,6 +1065,15 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {/* 자동포스팅 안내 팝업 */}
+      <AutoPostingInfoModal
+        isOpen={showInfoModal}
+        onClose={() => setShowInfoModal(false)}
+        onStart={() => {
+          if (!user) setShowLoginModal(true);
+        }}
+      />
 
       {/* 로그인 모달 */}
       {showLoginModal && (
@@ -1772,7 +1804,7 @@ export default function Home() {
                   추천인 {summaryCounts.referrer}
                 </span>
                 <span className="shrink-0 rounded-full bg-slate-700/60 px-3 py-1.5 text-xs text-slate-300">
-                  전체 {postLogs.length}
+                  전체 {todayLogs.length}
                 </span>
               </div>
             </div>
@@ -1796,6 +1828,10 @@ export default function Home() {
                 <div className="flex justify-center py-12 text-slate-500 md:py-16">
                   포스팅 로그가 없습니다.
                 </div>
+              ) : todayLogs.length === 0 ? (
+                <div className="flex justify-center py-12 text-slate-500 md:py-16">
+                  오늘 작업 내역이 없습니다.
+                </div>
               ) : (
                 <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 md:gap-4 lg:grid-cols-3">
                   {displayedLogs.map((row) => (
@@ -1804,14 +1840,22 @@ export default function Home() {
                 </div>
               )}
 
-              {!loading && postLogs.length > 0 && hasMore && (
-                <div className="border-t border-slate-700/60 p-4">
-                  <button
-                    onClick={() => setDisplayCount((c) => Math.min(c + LOAD_MORE_COUNT, postLogs.length))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 py-3 text-sm font-medium text-slate-300 transition hover:bg-white/10"
-                  >
-                    더 보기 ({postLogs.length - displayCount}건)
-                  </button>
+              {!loading && todayLogs.length > 0 && totalPages > 1 && (
+                <div className="flex flex-wrap items-center justify-center gap-2 border-t border-slate-700/60 p-4">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setLogPage(p)}
+                      className={`min-w-[2.25rem] rounded-lg px-3 py-2 text-sm font-medium transition ${
+                        logPage === p
+                          ? "bg-indigo-600 text-white"
+                          : "border border-slate-600 bg-slate-800/60 text-slate-300 hover:bg-slate-700/60"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
