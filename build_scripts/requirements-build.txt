@@ -1,0 +1,4 @@
+# 빌드/난독화용 의존성 (배포 exe 생성 시 사용)
+pyinstaller>=6.0.0
+pyarmor>=8.0.0
+cython>=3.0.0

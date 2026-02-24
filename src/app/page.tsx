@@ -626,6 +626,8 @@ export default function Home() {
         delay_max: (blog.delay_max as number) ?? 5,
         auto_restart: (blog.auto_restart as { enabled: boolean; after_minutes: number }) ?? { enabled: false, after_minutes: 10 },
         auto_start_cafe_after_blog: (blog.auto_start_cafe_after_blog as boolean) ?? false,
+        use_server_keywords: (blog.use_server_keywords as boolean) ?? false,
+        keyword_columns: (blog.keyword_columns as string) ?? "keyword",
       });
     } catch {
       // ignore
@@ -926,6 +928,8 @@ export default function Home() {
           delay_max: blogConfig.delay_max,
           auto_restart: blogConfig.auto_restart,
           auto_start_cafe_after_blog: blogConfig.auto_start_cafe_after_blog,
+          use_server_keywords: blogConfig.use_server_keywords,
+          keyword_columns: blogConfig.keyword_columns,
         },
       };
       const res = await fetch("/api/agent-configs", {
@@ -985,21 +989,25 @@ export default function Home() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-slate-100">
       {/* 상단 헤더 + 로그인 */}
       <header className="sticky top-0 z-50 border-b border-slate-700/60 bg-slate-900/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:px-8 md:py-4">
-          <div className="flex items-center gap-3">
-            <span className="flex items-baseline text-lg font-bold tracking-tight md:text-2xl" aria-hidden>
-              <span className="text-[#E04A2A]">c</span>
-              <span className="text-[#F59E0B]">o</span>
-              <span className="text-[#EAB308]">u</span>
-              <span className="text-[#22C55E]">p</span>
-              <span className="text-[#0EA5E9]">a</span>
-              <span className="text-[#6366F1]">n</span>
-              <span className="text-[#A855F7]">g</span>
-            </span>
-            <span className="h-5 w-px shrink-0 bg-slate-600" aria-hidden />
-            <h1 className="text-base font-bold text-white md:text-xl">쿠팡파트너스 자동포스팅 시스템</h1>
-          </div>
-          <div className="flex items-center gap-2 md:gap-4">
+        <div className="mx-auto max-w-6xl px-4 py-3 md:px-8 md:py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 shrink items-center gap-2 sm:gap-3">
+              <span className="flex shrink-0 items-baseline text-lg font-bold tracking-tight md:text-2xl" aria-hidden>
+                <span className="text-[#E04A2A]">c</span>
+                <span className="text-[#F59E0B]">o</span>
+                <span className="text-[#EAB308]">u</span>
+                <span className="text-[#22C55E]">p</span>
+                <span className="text-[#0EA5E9]">a</span>
+                <span className="text-[#6366F1]">n</span>
+                <span className="text-[#A855F7]">g</span>
+              </span>
+              <span className="hidden h-5 w-px shrink-0 bg-slate-600 sm:block" aria-hidden />
+              <h1 className="min-w-0 truncate text-sm font-bold text-white sm:text-base md:text-xl">
+                <span className="hidden sm:inline">쿠팡파트너스 자동포스팅 시스템</span>
+                <span className="sm:hidden">자동포스팅</span>
+              </h1>
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-2 md:gap-4">
             {sessionLoading ? (
               <span className="text-xs text-slate-400 md:text-sm">확인 중...</span>
             ) : user ? (
@@ -1028,6 +1036,7 @@ export default function Home() {
                 </button>
               </div>
             )}
+            </div>
           </div>
         </div>
       </header>
@@ -1305,54 +1314,54 @@ export default function Home() {
           </div>
         ) : (
           <>
-            <div className="mb-4 flex gap-1 rounded-xl border border-slate-700/60 bg-slate-800/40 p-1">
+            <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl border border-slate-700/60 bg-slate-800/40 p-2 sm:flex sm:gap-1 sm:p-1">
               <button
                 type="button"
                 onClick={() => setActiveTab((t) => (t === "blog" ? null : "blog"))}
-                className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition md:px-6 ${
+                className={`flex items-center justify-center gap-2 rounded-lg px-3 py-3 text-sm font-medium transition sm:flex-1 sm:px-4 sm:py-2.5 md:px-6 ${
                   activeTab === "blog"
                     ? "bg-indigo-600 text-white"
                     : "text-slate-400 hover:bg-slate-700/60 hover:text-slate-200"
                 }`}
               >
-                <span className="text-base" aria-hidden>📝</span>
-                <span>블로그설정</span>
+                <span className="text-lg sm:text-base" aria-hidden>📝</span>
+                <span className="whitespace-nowrap">블로그</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab((t) => (t === "cafe" ? null : "cafe"))}
-                className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition md:px-6 ${
+                className={`flex items-center justify-center gap-2 rounded-lg px-3 py-3 text-sm font-medium transition sm:flex-1 sm:px-4 sm:py-2.5 md:px-6 ${
                   activeTab === "cafe"
                     ? "bg-indigo-600 text-white"
                     : "text-slate-400 hover:bg-slate-700/60 hover:text-slate-200"
                 }`}
               >
-                <span className="text-base" aria-hidden>☕</span>
-                <span>카페설정</span>
+                <span className="text-lg sm:text-base" aria-hidden>☕</span>
+                <span className="whitespace-nowrap">카페</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab((t) => (t === "cafe_join" ? null : "cafe_join"))}
-                className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition md:px-6 ${
+                className={`flex items-center justify-center gap-2 rounded-lg px-3 py-3 text-sm font-medium transition sm:flex-1 sm:px-4 sm:py-2.5 md:px-6 ${
                   activeTab === "cafe_join"
                     ? "bg-indigo-600 text-white"
                     : "text-slate-400 hover:bg-slate-700/60 hover:text-slate-200"
                 }`}
               >
-                <span className="text-base" aria-hidden>➕</span>
-                <span>카페가입설정</span>
+                <span className="text-lg sm:text-base" aria-hidden>➕</span>
+                <span className="whitespace-nowrap">카페가입</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab((t) => (t === "coupang_api" ? null : "coupang_api"))}
-                className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition md:px-6 ${
+                className={`flex items-center justify-center gap-2 rounded-lg px-3 py-3 text-sm font-medium transition sm:flex-1 sm:px-4 sm:py-2.5 md:px-6 ${
                   activeTab === "coupang_api"
                     ? "bg-indigo-600 text-white"
                     : "text-slate-400 hover:bg-slate-700/60 hover:text-slate-200"
                 }`}
               >
-                <span className="text-base" aria-hidden>🔑</span>
-                <span>쿠팡API</span>
+                <span className="text-lg sm:text-base" aria-hidden>🔑</span>
+                <span className="whitespace-nowrap">쿠팡API</span>
               </button>
             </div>
 

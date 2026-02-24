@@ -1,0 +1,19 @@
+{
+  "blog_naver_id": "ulamlsm",
+  "blog_naver_pw": "@tofhyuna070207",
+  "blog_interval_min": 2,
+  "blog_interval_max": 5,
+  "blog_auto_start_cafe": false,
+  "blog_post_count": 1,
+  "blog_use_product_name": true,
+  "blog_kw_repeat_min": 3,
+  "blog_kw_repeat_max": 7,
+  "blog_linebreak": true,
+  "blog_maxchars": 23,
+  "blog_bg_highlight": 5,
+  "blog_commission_image_folder": "C:/Users/USER/Desktop/coupang_bot/쿠팡수수료",
+  "blog_multi_account": false,
+  "blog_multi_account_file": "C:/Users/USER/Desktop/쿠팡카페리스트/아이디리스트.txt",
+  "blog_account_switch_wait": 2,
+  "blog_infinite_loop": true
+}
