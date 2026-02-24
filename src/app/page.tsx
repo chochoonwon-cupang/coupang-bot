@@ -406,6 +406,8 @@ export default function Home() {
     delay_max: 5,
     auto_restart: { enabled: false, after_minutes: 10 },
     auto_start_cafe_after_blog: false,
+    use_server_keywords: false,
+    keyword_columns: "keyword",
   });
   const [blogConfigLoading, setBlogConfigLoading] = useState(false);
   const [blogConfigSaving, setBlogConfigSaving] = useState(false);
