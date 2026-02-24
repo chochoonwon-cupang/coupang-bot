@@ -992,9 +992,9 @@ export default function Home() {
       {/* 상단 헤더 + 로그인 */}
       <header className="sticky top-0 z-50 border-b border-slate-700/60 bg-slate-900/80 backdrop-blur">
         <div className="mx-auto max-w-6xl px-4 py-3 md:px-8 md:py-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 shrink items-center gap-2 sm:gap-3">
-              <span className="flex shrink-0 items-baseline text-lg font-bold tracking-tight md:text-2xl" aria-hidden>
+              <span className="flex shrink-0 items-baseline text-base font-bold tracking-tight sm:text-lg md:text-2xl" aria-hidden>
                 <span className="text-[#E04A2A]">c</span>
                 <span className="text-[#F59E0B]">o</span>
                 <span className="text-[#EAB308]">u</span>
@@ -1009,7 +1009,7 @@ export default function Home() {
                 <span className="sm:hidden">자동포스팅</span>
               </h1>
             </div>
-            <div className="flex shrink-0 items-center justify-end gap-2 md:gap-4">
+            <div className="flex shrink-0 items-center gap-2 md:gap-4">
             {sessionLoading ? (
               <span className="text-xs text-slate-400 md:text-sm">확인 중...</span>
             ) : user ? (
