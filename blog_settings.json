@@ -1,9 +1,9 @@
 {
   "blog_naver_id": "ulamlsm",
   "blog_naver_pw": "@tofhyuna070207",
-  "blog_interval_min": 2,
-  "blog_interval_max": 5,
-  "blog_auto_start_cafe": false,
+  "blog_interval_min": 60,
+  "blog_interval_max": 120,
+  "blog_auto_start_cafe": true,
   "blog_post_count": 2,
   "blog_use_product_name": true,
   "blog_kw_repeat_min": 3,

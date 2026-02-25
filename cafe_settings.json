@@ -206,7 +206,7 @@
   ],
   "posting_interval_min": 5,
   "posting_interval_max": 10,
-  "post_count": 2,
+  "post_count": 50,
   "linebreak_enabled": true,
   "linebreak_max_chars": 23,
   "kw_repeat_min": 2,

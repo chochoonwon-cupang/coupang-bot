@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import AppShell from "@/components/AppShell";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "포스팅 작업 관리 | 쿠팡 파트너스",
-  description: "키워드 입력 후 발행하면 에이전트가 자동으로 네이버 카페에 포스팅합니다.",
+  title: "쿠팡파트너스 자동포스팅 시스템",
+  description: "상품 수집부터 파트너 링크 생성, 자동 게시까지 수익 구조를 자동화하는 시스템",
 };
 
 export default function RootLayout({
@@ -23,11 +24,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
+    <html lang="ko">
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
