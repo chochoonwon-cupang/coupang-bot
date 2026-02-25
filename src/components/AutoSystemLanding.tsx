@@ -1,5 +1,4 @@
 import Link from "next/link";
-import AutoSystemPreview from "@/components/AutoSystemPreview";
 import FadeInScroll from "@/components/FadeInScroll";
 import CostImpactDualChart from "@/components/CostImpactDualChart";
 import TimingGapSection from "@/components/TimingGapSection";
@@ -30,36 +29,21 @@ export default function AutoSystemLanding() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-slate-100">
       <main className="mx-auto max-w-7xl px-4 py-16 md:px-8 md:py-20 lg:py-28">
         {/* Hero - 2 columns on desktop */}
-        <section className="flex flex-col items-center gap-12 lg:flex-row lg:items-center lg:justify-between lg:gap-16">
-          <div className="flex-1 text-center lg:text-left">
+        <section className="flex flex-col items-center gap-12 lg:flex-row lg:items-center lg:justify-center lg:gap-16">
+          <div className="flex-1 text-center">
             <h1 className="animate-fade-slide-up text-3xl font-bold tracking-tight text-white md:text-4xl lg:text-5xl xl:text-6xl">
-              쿠팡파트너스 수익을 자동화하다
+              쿠팡파트너스
+              <br />
+              수익을 자동화하다
             </h1>
-            <p className="animate-fade-slide-up animate-delay-100 mx-auto mt-5 max-w-xl text-base text-slate-300 md:text-lg lg:mx-0">
-              상품 수집부터 파트너 링크 생성, 자동 게시까지
-              <br className="hidden sm:inline" />
-              수익 구조를 자동화하는 플랫폼
+            <p className="animate-fade-slide-up animate-delay-100 mx-auto mt-5 max-w-xl text-base text-slate-300 md:text-lg">
+              상품 수집부터 파트너 링크 생성
+              <br />
+              자동 게시까지 수익 구조를 자동화하는 플랫폼
             </p>
-            <div className="animate-fade-slide-up animate-delay-200 mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center lg:justify-start">
-              <Link
-                href="/work-settings"
-                className="inline-flex min-h-[52px] min-w-[160px] items-center justify-center rounded-xl bg-orange-500 px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-orange-500/25 transition hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-slate-900"
-              >
-                지금 시작하기
-              </Link>
-              <Link
-                href="/work-history"
-                className="inline-flex min-h-[52px] min-w-[160px] items-center justify-center rounded-xl border border-slate-600 bg-slate-800/80 px-8 py-3.5 text-base font-semibold text-slate-200 transition hover:bg-slate-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 focus:ring-offset-slate-900"
-              >
-                작업내역 보기
-              </Link>
-            </div>
-            <p className="animate-fade-slide-up animate-delay-300 mt-4 text-xs text-slate-500 md:text-sm">
-              하루 40개 기준 800원 — 수동 작성 대비 시간을 절약하세요
+            <p className="animate-fade-slide-up animate-delay-300 mt-8 text-base font-bold text-orange-400 md:text-lg">
+              하루 40개 기준 800원
             </p>
-          </div>
-          <div className="animate-fade-slide-up animate-delay-200 flex-1 w-full max-w-md">
-            <AutoSystemPreview />
           </div>
         </section>
 
@@ -69,7 +53,9 @@ export default function AutoSystemLanding() {
             시간 대비 비용 비교
           </h2>
           <p className="mt-3 text-center text-base text-slate-500 md:text-lg">
-            단돈 800원, 당신의 소중한 20시간을 되찾기에 가장 완벽한 금액입니다.
+            단돈 800원, 당신의 소중한 20시간을
+              <br />
+              되찾기에 가장 완벽한 금액 입니다.
           </p>
           <div className="mx-auto mt-12 max-w-5xl">
             <CostImpactDualChart />
@@ -82,7 +68,9 @@ export default function AutoSystemLanding() {
             시간 대비 임팩트
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-center text-sm text-slate-400 md:text-base">
-            사람이 직접 하루 10개 작성하려면 약 5시간 소요 · 이 시스템은 40개를 800원으로 자동 생성/게시
+            사람이 직접 하루 10개 작성하려면 약 5시간 소요
+            <br />
+            이 시스템은 40개를 800원으로 자동 생성/게시
           </p>
           <div className="mt-12 grid gap-6 sm:grid-cols-2">
             <div className="card-hover-lift rounded-2xl border border-slate-700/60 bg-slate-800/60 p-8 shadow-xl backdrop-blur">

@@ -143,7 +143,9 @@ export default function CostImpactDualChart() {
             수작업(10개/일) vs 프로그램(40개/일)
           </div>
           <div className="mt-1 text-xs text-slate-500">
-            수작업: {won(WAGE_PER_HOUR)}원/시간 × {MANUAL_HOURS_PER_DAY}시간 = {won(manualCostPerDay)}원/일 · 프로그램: 20원 × 40개 = {won(AUTO_COST_PER_DAY)}원/일
+            수작업: {won(WAGE_PER_HOUR)}원/시간 × {MANUAL_HOURS_PER_DAY}시간 = {won(manualCostPerDay)}원/일
+            <br />
+            프로그램: 20원 × 40개 = {won(AUTO_COST_PER_DAY)}원/일
           </div>
         </div>
 

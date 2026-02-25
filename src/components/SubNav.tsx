@@ -17,7 +17,7 @@ export default function SubNav() {
     <nav className="sticky top-[57px] z-40 border-b border-slate-700/60 bg-slate-800/60 backdrop-blur">
       <div className="mx-auto max-w-6xl px-4 py-2 md:px-8">
         <div
-          className="flex justify-center gap-2 overflow-x-auto scrollbar-hide md:overflow-visible"
+          className="flex justify-start gap-2 overflow-x-auto scrollbar-hide md:justify-center md:overflow-visible"
           style={{
             WebkitOverflowScrolling: "touch",
             scrollbarWidth: "none",

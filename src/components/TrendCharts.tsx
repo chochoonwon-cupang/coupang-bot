@@ -75,7 +75,9 @@ export default function TrendCharts() {
         추세로 보는 자동화의 시대
       </h2>
       <p className="mx-auto mt-4 max-w-2xl text-center text-sm text-slate-400 md:text-base">
-        반복 작업은 자동화로 이동 · 수동 작성은 점점 비효율 · 아는 사람은 시스템으로 운영
+        반복 작업은 자동화로 이동 · 수동 작성은 점점 비효율
+        <br />
+        아는 사람은 시스템으로 운영
       </p>
       <div className="mt-12 grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
         {CHART_CONFIGS.map((config, i) => (
